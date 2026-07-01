@@ -179,37 +179,62 @@ Generated content should reference evidence rather than unsupported claims.
 
 ---
 
+# Program
+
+A Program is a first-class canonical career knowledge entity.
+
+Programs model structured experiences that span multiple categories and cannot be represented accurately as only education, employment, a project, or an achievement. A Program acts as a durable container that connects those records without duplicating them.
+
+Examples include:
+
+- Galaxy Evolution Vertically Integrated Program (GEVIP)
+- Nash Leaders Program
+- Honors Program
+- NSF REU
+- Leadership Cohorts
+- Startup Accelerators
+
+A Program should capture its name, sponsoring organization, summary, categories, dates, current status, and optional source URL.
+
+Programs have the following relationships:
+
+- One user owns many Programs.
+- Programs may relate to many Education records.
+- Programs may relate to many Experiences.
+- Programs may relate to many Projects.
+- Programs may relate to many Achievements.
+- Programs may demonstrate many Skills.
+- Programs may be supported by many Evidence items.
+
+Education, Experience, Project, Achievement, Skill, and Evidence records remain canonical entities in their own right. Linking them to a Program must not copy or move their facts into the Program record.
+
+Programs are editable canonical knowledge. They should support soft deletion and standard creation and update timestamps. Historical application snapshots that cite a Program remain immutable.
+
+---
+
 # Relationships
 
 The domain model is relational but conceptually forms a connected knowledge graph.
 
 Examples include:
 
-Person
-
-↓
-
-Experience
-
-↓
-
-Project
-
-↓
-
-Skill
-
-↓
-
-Application
-
-↓
-
-Interview
-
-↓
-
-Outcome
+```mermaid
+flowchart TD
+    Person --> Program
+    Person --> Education
+    Person --> Experience
+    Program --> Education
+    Program --> Experience
+    Program --> Project
+    Program --> Achievement
+    Program --> Skill
+    Program --> Evidence
+    Experience --> Project
+    Project --> Skill
+    Skill --> Application
+    Application --> Interview
+    Interview --> Outcome
+```
 
 The application should store these relationships explicitly to support explainable recommendations and long-term learning.
 

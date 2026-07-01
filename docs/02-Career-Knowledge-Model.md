@@ -114,6 +114,23 @@ Each experience stores:
 
 ---
 
+## Program
+
+Represents a structured, multi-category experience that connects education, experience, projects, achievements, skills, and evidence without duplicating them.
+
+Examples:
+
+* Galaxy Evolution Vertically Integrated Program (GEVIP)
+* Nash Leaders Program
+* Honors Program
+* NSF REU
+* Leadership Cohorts
+* Startup Accelerators
+
+Programs may span academic, research, leadership, professional development, and entrepreneurial categories at the same time.
+
+---
+
 ## Project
 
 Represents any technical, academic, research, hackathon, or personal project.
@@ -165,6 +182,7 @@ Examples:
 
 Skills can be linked to:
 
+* Programs
 * Experiences
 * Projects
 * Achievements
@@ -283,6 +301,10 @@ CareerOS is designed as a connected knowledge graph.
 For example:
 
 Person
+
+↓
+
+Program
 
 ↓
 
