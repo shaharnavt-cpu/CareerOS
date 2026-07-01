@@ -1,0 +1,6 @@
+CareerOS database migrations are managed by Alembic.
+
+Run commands from the backend directory so alembic.ini is discovered:
+
+    alembic upgrade head
+    alembic downgrade base
