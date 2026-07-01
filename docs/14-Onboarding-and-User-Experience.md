@@ -608,27 +608,10 @@ Sprint 3 is complete when:
 
 ---
 
-## 22. Future Sprint Scope
+## 22. Sprint Scope
 
-### Sprint 4: Real Career Knowledge API Integration
-
-Connect approved onboarding items to backend models.
-
-### Sprint 5: File Upload and Parsing
-
-Support resume upload and text extraction.
-
-### Sprint 6: AI Extraction
-
-Use LLMs to extract structured proposed knowledge from text.
-
-### Sprint 7: Evidence Linking
-
-Automatically connect facts to documents and source excerpts.
-
-### Sprint 8: Resume Generation
-
-Generate evidence-backed resume drafts from approved knowledge.
+- Sprint 3 implements the onboarding experience described in this document.
+- Future sprint sequencing is defined exclusively in `docs/13-Development-Roadmap.md`.
 
 ---
 
