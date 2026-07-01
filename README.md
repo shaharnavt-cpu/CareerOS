@@ -4,8 +4,8 @@ CareerOS is an AI-powered career operating system that remembers a user's
 professional journey, reduces repetitive work, and provides evidence-based
 recommendations while keeping the user in control.
 
-The project is currently in **Sprint 1: Project Foundation**. The repository
-contains runnable frontend and backend shells, but no CareerOS business logic.
+The project currently includes the project foundation and Career Knowledge
+Engine persistence layer.
 
 ## Repository layout
 
@@ -29,6 +29,7 @@ CareerOS/
 - Node.js 20.9 or newer
 - npm 10 or newer
 - Python 3.12
+- Docker Desktop or another Docker Compose-compatible runtime
 
 ## Initial setup
 
@@ -56,7 +57,41 @@ python -m pip install --upgrade pip
 python -m pip install -e "./backend[dev]"
 ```
 
-Optionally copy `.env.example` to `.env` when local configuration is needed.
+Create the local environment file from the committed template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+On macOS or Linux:
+
+```bash
+cp .env.example .env
+```
+
+The default values are for local development only. They configure both Docker
+Compose and the backend to use PostgreSQL at `localhost:5432`.
+
+## Local database
+
+Start PostgreSQL 16 and wait for its health check to pass:
+
+```bash
+docker compose up -d --wait database
+```
+
+Apply all database migrations from the repository root:
+
+```bash
+python -m alembic -c backend/alembic.ini upgrade head
+```
+
+Inspect the container and migration state when needed:
+
+```bash
+docker compose ps
+python -m alembic -c backend/alembic.ini current
+```
 
 ## Run locally
 
@@ -77,6 +112,15 @@ python -m uvicorn app.main:app --app-dir backend --reload
 The API is available at <http://localhost:8000>. Its health endpoint is
 `GET http://localhost:8000/api/health`, and interactive API documentation is
 available at <http://localhost:8000/docs>.
+
+Stop the local database without deleting its data:
+
+```bash
+docker compose down
+```
+
+To also delete the local database volume and start from an empty database, run
+`docker compose down --volumes`.
 
 ## Quality checks
 

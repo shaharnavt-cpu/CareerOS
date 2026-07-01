@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/careeros"
+    database_url: str = "postgresql+psycopg://careeros:careeros@localhost:5432/careeros"
     database_echo: bool = False
     database_pool_size: int = 5
     database_max_overflow: int = 10
