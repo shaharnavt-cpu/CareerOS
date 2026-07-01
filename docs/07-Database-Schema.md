@@ -37,6 +37,7 @@ Canonical knowledge is the user's current professional profile.
 
 Examples:
 
+- programs
 - education
 - experiences
 - projects
@@ -191,6 +192,8 @@ Enum values use uppercase snake case:
 
 ### Career Knowledge Domain
 
+- programs
+- program_links
 - education
 - experiences
 - projects
@@ -309,7 +312,104 @@ UNIQUE (user_id);
 
 ## 7. Career Knowledge Domain
 
-## 7.1 Table: education
+## 7.1 Table: programs
+
+### Purpose
+
+Stores first-class Programs: structured experiences that may span academic, research, leadership, professional development, and entrepreneurial categories.
+
+A Program groups related canonical knowledge without duplicating the underlying Education, Experience, Project, Achievement, Skill, or Evidence records.
+
+Examples include:
+
+- Galaxy Evolution Vertically Integrated Program (GEVIP)
+- Nash Leaders Program
+- Honors Program
+- NSF REU
+- Leadership Cohorts
+- Startup Accelerators
+
+### Columns
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| id | UUID | Yes | Primary key |
+| user_id | UUID | Yes | FK users.id |
+| name | TEXT | Yes | Program name |
+| organization_name | TEXT | No | Sponsoring institution or organization |
+| summary | TEXT | No | Program purpose and participation summary |
+| categories | JSONB | No | Array such as RESEARCH, LEADERSHIP, HONORS |
+| start_date | DATE | No | Start date |
+| end_date | DATE | No | End date |
+| date_precision | TEXT | No | DAY, MONTH, YEAR, UNKNOWN |
+| is_current | BOOLEAN | Yes | Default false |
+| program_url | TEXT | No | Official or supporting URL |
+| created_at | TIMESTAMPTZ | Yes | Creation timestamp |
+| updated_at | TIMESTAMPTZ | Yes | Last update |
+| deleted_at | TIMESTAMPTZ | No | Soft delete |
+
+### Relationships
+
+| Related Entity | Cardinality | Implementation |
+|---|---|---|
+| users | Many Programs to one User | `programs.user_id` FK |
+| education | Many-to-many | `program_links` with `entity_type = EDUCATION` |
+| experiences | Many-to-many | `program_links` with `entity_type = EXPERIENCE` |
+| projects | Many-to-many | `program_links` with `entity_type = PROJECT` |
+| achievements | Many-to-many | `program_links` with `entity_type = ACHIEVEMENT` |
+| skills | Many-to-many | `skill_links` with `entity_type = PROGRAM` |
+| evidence_items | Many-to-many | `evidence_links` with `entity_type = PROGRAM` |
+
+### Indexes
+
+```sql
+CREATE INDEX idx_programs_user_id ON programs(user_id);
+CREATE INDEX idx_programs_user_dates ON programs(user_id, start_date, end_date);
+```
+
+---
+
+## 7.2 Table: program_links
+
+### Purpose
+
+Connects a Program to the Education, Experience, Project, and Achievement records that occurred within or resulted from it.
+
+The link preserves each entity as canonical knowledge while allowing one Program to span multiple categories and allowing one entity to participate in more than one Program.
+
+### Columns
+
+| Column | Type | Required | Notes |
+|---|---:|---:|---|
+| id | UUID | Yes | Primary key |
+| user_id | UUID | Yes | FK users.id |
+| program_id | UUID | Yes | FK programs.id |
+| entity_type | TEXT | Yes | EDUCATION, EXPERIENCE, PROJECT, ACHIEVEMENT |
+| entity_id | UUID | Yes | ID of linked entity |
+| relationship_type | TEXT | No | PARTICIPATION, PRODUCED, RECOGNIZED_BY, etc. |
+| notes | TEXT | No | Relationship context |
+| created_at | TIMESTAMPTZ | Yes | Creation timestamp |
+
+### Constraints
+
+```sql
+UNIQUE (program_id, entity_type, entity_id);
+```
+
+### Indexes
+
+```sql
+CREATE INDEX idx_program_links_program_id ON program_links(program_id);
+CREATE INDEX idx_program_links_user_entity ON program_links(user_id, entity_type, entity_id);
+```
+
+### Implementation Note
+
+`entity_type` plus `entity_id` cannot be fully enforced with standard foreign keys. Backend services must verify that the Program and linked entity both belong to `user_id` and that the entity exists in the table identified by `entity_type`.
+
+---
+
+## 7.3 Table: education
 
 ### Purpose
 
@@ -344,7 +444,7 @@ CREATE INDEX idx_education_user_end_date ON education(user_id, end_date);
 
 ---
 
-## 7.2 Table: experiences
+## 7.4 Table: experiences
 
 ### Purpose
 
@@ -399,7 +499,7 @@ CREATE INDEX idx_experiences_user_dates ON experiences(user_id, start_date, end_
 
 ---
 
-## 7.3 Table: projects
+## 7.5 Table: projects
 
 ### Purpose
 
@@ -441,7 +541,7 @@ CREATE INDEX idx_projects_user_dates ON projects(user_id, start_date, end_date);
 
 ---
 
-## 7.4 Table: achievements
+## 7.6 Table: achievements
 
 ### Purpose
 
@@ -484,7 +584,7 @@ OTHER
 
 ---
 
-## 7.5 Table: skills
+## 7.7 Table: skills
 
 ### Purpose
 
@@ -516,11 +616,11 @@ UNIQUE (user_id, normalized_name);
 
 ---
 
-## 7.6 Table: skill_links
+## 7.8 Table: skill_links
 
 ### Purpose
 
-Connects skills to experiences, projects, achievements, education, and evidence-bearing entities.
+Connects skills to programs, experiences, projects, achievements, education, and evidence-bearing entities.
 
 This avoids duplicating skill data across multiple tables.
 
@@ -531,7 +631,7 @@ This avoids duplicating skill data across multiple tables.
 | id | UUID | Yes | Primary key |
 | user_id | UUID | Yes | FK users.id |
 | skill_id | UUID | Yes | FK skills.id |
-| entity_type | TEXT | Yes | PROJECT, EXPERIENCE, ACHIEVEMENT, EDUCATION |
+| entity_type | TEXT | Yes | PROGRAM, PROJECT, EXPERIENCE, ACHIEVEMENT, EDUCATION |
 | entity_id | UUID | Yes | ID of linked entity |
 | relevance_score | NUMERIC(4,3) | No | Optional |
 | notes | TEXT | No | Context |
@@ -539,7 +639,7 @@ This avoids duplicating skill data across multiple tables.
 
 ### Implementation Note
 
-`entity_type` plus `entity_id` is flexible but cannot be fully enforced with standard foreign keys. In Sprint 2, backend services must enforce that linked entities belong to the same user.
+`entity_type` plus `entity_id` is flexible but cannot be fully enforced with standard foreign keys. Backend services must enforce that linked entities belong to the same user.
 
 ---
 
@@ -616,7 +716,7 @@ Evidence is many-to-many. One GitHub repo may support a project, multiple skills
 | id | UUID | Yes | Primary key |
 | user_id | UUID | Yes | FK users.id |
 | evidence_item_id | UUID | Yes | FK evidence_items.id |
-| entity_type | TEXT | Yes | PROJECT, EXPERIENCE, SKILL, ACHIEVEMENT, etc. |
+| entity_type | TEXT | Yes | PROGRAM, PROJECT, EXPERIENCE, SKILL, ACHIEVEMENT, etc. |
 | entity_id | UUID | Yes | ID of linked entity |
 | relationship_type | TEXT | No | SUPPORTS, VERIFIES, DOCUMENTS, etc. |
 | excerpt | TEXT | No | Optional exact supporting text |
@@ -1226,6 +1326,9 @@ ON artifact_revisions(artifact_id, revision_number DESC);
 
 CREATE INDEX idx_evidence_links_entity
 ON evidence_links(user_id, entity_type, entity_id);
+
+CREATE INDEX idx_program_links_user_entity
+ON program_links(user_id, entity_type, entity_id);
 ```
 
 ### Future Search Indexes
@@ -1233,6 +1336,7 @@ ON evidence_links(user_id, entity_type, entity_id);
 Full-text search may be added for:
 
 - jobs.description
+- programs.summary
 - projects.summary
 - experiences.summary
 - artifact_revisions.content_markdown
@@ -1297,6 +1401,13 @@ The following should be designed but can wait:
 
 This keeps Sprint 2 focused on the Career Knowledge Engine.
 
+Sprint 2.5 approves the following schema extension:
+
+- programs
+- program_links
+
+This documentation update does not rewrite the existing initial migration. Program persistence requires a separately approved implementation and Alembic migration.
+
 ---
 
 ## 19. Mermaid ER Diagram
@@ -1304,6 +1415,7 @@ This keeps Sprint 2 focused on the Career Knowledge Engine.
 ```mermaid
 erDiagram
     USERS ||--o{ USER_PREFERENCES : has
+    USERS ||--o{ PROGRAMS : owns
     USERS ||--o{ EDUCATION : owns
     USERS ||--o{ EXPERIENCES : owns
     USERS ||--o{ PROJECTS : owns
@@ -1311,6 +1423,14 @@ erDiagram
     USERS ||--o{ SKILLS : owns
     USERS ||--o{ EVIDENCE_ITEMS : owns
     USERS ||--o{ APPLICATIONS : submits
+
+    PROGRAMS ||--o{ PROGRAM_LINKS : groups
+    EDUCATION ||--o{ PROGRAM_LINKS : may_join
+    EXPERIENCES ||--o{ PROGRAM_LINKS : may_join
+    PROJECTS ||--o{ PROGRAM_LINKS : may_join
+    ACHIEVEMENTS ||--o{ PROGRAM_LINKS : may_join
+    PROGRAMS ||--o{ SKILL_LINKS : demonstrates
+    PROGRAMS ||--o{ EVIDENCE_LINKS : supported_by
 
     EXPERIENCES ||--o{ PROJECTS : may_contain
     EDUCATION ||--o{ PROJECTS : may_contain
