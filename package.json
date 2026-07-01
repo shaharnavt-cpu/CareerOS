@@ -1,0 +1,19 @@
+{
+  "name": "careeros",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CareerOS monorepo",
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace @careeros/frontend",
+    "build": "npm run build --workspace @careeros/frontend",
+    "lint": "npm run lint --workspace @careeros/frontend"
+  },
+  "engines": {
+    "node": ">=20.9.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@11.9.0"
+}
