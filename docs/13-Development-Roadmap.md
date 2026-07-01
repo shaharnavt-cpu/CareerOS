@@ -2,31 +2,36 @@
 
 ## Sprint 1
 
--   Foundation ✅
+- Foundation
 
 ## Sprint 2
 
--   Database
--   CRUD APIs
--   Career knowledge
+- Career Knowledge Engine
 
 ## Sprint 3
 
--   Applications
--   Job analysis
+- Conversational Onboarding
 
 ## Sprint 4
 
--   Resume engine
+- AI Extraction
 
 ## Sprint 5
 
--   Cover letters
+- Resume Generation
 
 ## Sprint 6
 
--   Browser extension
+- Job Intelligence
 
 ## Sprint 7
 
--   Analytics
+- Browser Extension
+
+## Sprint 8
+
+- Application Tracker
+
+## Sprint 9
+
+- Interview Intelligence

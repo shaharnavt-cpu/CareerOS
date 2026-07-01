@@ -740,6 +740,8 @@ The onboarding flow should eventually create or update:
 
 - users
 - user_preferences
+- programs
+- program_links
 - education
 - experiences
 - projects
@@ -751,13 +753,12 @@ The onboarding flow should eventually create or update:
 
 Future versions may also create:
 
-- programs
 - artifacts
 - ai_runs
 - ai_citations
 - timeline_events
 
-The Program entity should be added in a future schema revision before real GEVIP-style modeling is implemented.
+Programs are now part of the canonical CareerOS schema. Sprint 3 may represent Programs with mock data, while persistence remains deferred until the approved backend integration work.
 
 ---
 
@@ -772,7 +773,7 @@ This document implies the following product decisions:
 5. Career knowledge as a connected graph, not isolated categories.
 6. User approval required before extracted knowledge becomes canonical.
 
-These should be recorded in ADR-001 or separate ADRs.
+These decisions are recorded in ADR-001.
 
 ---
 
