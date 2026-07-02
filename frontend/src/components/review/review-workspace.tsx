@@ -1,61 +1,98 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/common/status-badge";
+import { categoryOrder } from "@/lib/onboarding-data";
 import {
-  categoryOrder,
-  knowledgeItems,
-  type KnowledgeItem,
-} from "@/lib/onboarding-data";
-
-type Decision = "pending" | "approved" | "rejected";
-type ReviewItem = KnowledgeItem & { decision: Decision };
+  clarificationReasonLabel,
+  loadProposals,
+  type KnowledgeProposal,
+  proposalCategory,
+  proposalDetail,
+  proposalPrimaryField,
+  proposalTitle,
+  reviewKnowledgeProposal,
+  saveProposals,
+} from "@/lib/knowledge-api";
 
 export function ReviewWorkspace() {
-  const [items, setItems] = useState<ReviewItem[]>(
-    knowledgeItems.map((item) => ({ ...item, decision: "pending" })),
-  );
+  const [items, setItems] = useState<KnowledgeProposal[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [pendingId, setPendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState(
     "Nothing becomes canonical until you approve it.",
   );
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setItems(loadProposals()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   const approvedCount = useMemo(
-    () => items.filter((item) => item.decision === "approved").length,
+    () => items.filter((item) => item.approval_state === "CANONICAL").length,
     [items],
   );
 
-  function decide(id: string, decision: Decision) {
-    setItems((current) =>
-      current.map((item) => (item.id === id ? { ...item, decision } : item)),
-    );
-    setNotice(
-      decision === "approved"
-        ? "Approved in this preview. No data has been saved."
-        : "Rejected in this preview. You can change your decision anytime.",
-    );
+  function updateItem(updated: KnowledgeProposal) {
+    setItems((current) => {
+      const next = current.map((item) =>
+        item.id === updated.id ? updated : item,
+      );
+      saveProposals(next);
+      return next;
+    });
   }
 
-  function startEditing(item: ReviewItem) {
+  async function decide(
+    proposal: KnowledgeProposal,
+    decision: "APPROVE" | "REJECT",
+  ) {
+    setPendingId(proposal.id);
+    try {
+      const result = await reviewKnowledgeProposal(proposal, decision);
+      updateItem(result.proposal);
+      setNotice(
+        decision === "APPROVE"
+          ? "Approved and saved to Career Memory with its evidence."
+          : "Rejected. This proposal was not written to Career Memory.",
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "CareerOS could not apply that decision.",
+      );
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  function startEditing(item: KnowledgeProposal) {
     setEditingId(item.id);
-    setDraftTitle(item.title);
+    setDraftTitle(proposalTitle(item));
   }
 
-  function saveEdit(id: string) {
+  function saveEdit(item: KnowledgeProposal) {
     const value = draftTitle.trim();
     if (!value) return;
-    setItems((current) =>
-      current.map((item) =>
-        item.id === id
-          ? { ...item, title: value, status: "recently-added" }
-          : item,
-      ),
-    );
+    const primaryField = proposalPrimaryField(item);
+    updateItem({
+      ...item,
+      proposed_value: {
+        ...item.proposed_value,
+        [primaryField]: value,
+        ...(item.entity_type === "SKILL"
+          ? { normalized_name: value.toLowerCase() }
+          : {}),
+      },
+      clarification: null,
+      approval_state: "NEEDS_REVIEW",
+    });
     setEditingId(null);
-    setNotice("Edit applied locally. No data has been saved.");
+    setNotice("Edit validated locally. Approve it to update Career Memory.");
   }
 
   return (
@@ -69,14 +106,13 @@ export function ReviewWorkspace() {
             Here’s what I understood.
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-[#667871]">
-            Check the proposed structure, correct anything that feels off, and
-            decide what belongs in your profile. This preview never persists
-            your choices.
+            Review the confidence, evidence, and reasoning behind each proposal.
+            Your decision is the boundary between AI reasoning and Career Memory.
           </p>
         </div>
         <div className="rounded-2xl border border-[#d6e3db] bg-white px-5 py-4 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#84928d]">
-            Mock approvals
+            Canonical approvals
           </p>
           <p className="mt-1 text-2xl font-semibold text-[#265a48]">
             {approvedCount}
@@ -94,103 +130,153 @@ export function ReviewWorkspace() {
         {notice}
       </div>
 
-      <div className="mt-8 space-y-10">
-        {categoryOrder.map((category) => {
-          const categoryItems = items.filter(
-            (item) => item.category === category,
-          );
+      {items.length === 0 ? (
+        <div className="mt-8 rounded-[22px] border border-dashed border-[#cfdad3] bg-white p-8 text-center">
+          <p className="text-sm text-[#65766f]">No proposals are ready yet.</p>
+          <Link
+            className="mt-4 inline-flex rounded-full bg-[#173f35] px-5 py-2.5 text-sm font-semibold text-white"
+            href="/onboarding"
+          >
+            Analyze a career source
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-8 space-y-10">
+          {categoryOrder.map((category) => {
+            const categoryItems = items.filter(
+              (item) => proposalCategory(item) === category,
+            );
 
-          return (
-            <section key={category}>
-              <div className="mb-3 flex items-center gap-3">
-                <h2 className="text-sm font-bold uppercase tracking-[0.13em] text-[#49635a]">
-                  {category}
-                </h2>
-                <span className="h-px flex-1 bg-[#dce4df]" />
-                <span className="text-xs text-[#8d9a95]">
-                  {categoryItems.length}
-                </span>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-2">
-                {categoryItems.map((item) => (
-                  <article
-                    className={`rounded-[22px] border bg-white p-5 shadow-[0_14px_35px_-30px_rgba(23,63,53,0.75)] transition ${
-                      item.decision === "approved"
-                        ? "border-[#91c8ab] ring-2 ring-[#dff1e7]"
-                        : item.decision === "rejected"
-                          ? "border-[#e4d6d1] opacity-55"
-                          : "border-[#dce4df]"
-                    }`}
-                    key={item.id}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        {editingId === item.id ? (
-                          <div className="flex gap-2">
-                            <input
-                              aria-label={`Edit ${item.title}`}
-                              autoFocus
-                              className="min-w-0 flex-1 rounded-xl border border-[#a9c7b8] px-3 py-2 text-sm text-[#1c3b31] outline-none ring-[#dceee5] focus:ring-4"
-                              onChange={(event) =>
-                                setDraftTitle(event.target.value)
-                              }
-                              value={draftTitle}
-                            />
-                            <button
-                              className="rounded-xl bg-[#245f4d] px-3 text-xs font-semibold text-white"
-                              onClick={() => saveEdit(item.id)}
-                              type="button"
-                            >
-                              Save
-                            </button>
-                          </div>
-                        ) : (
-                          <h3 className="text-base font-semibold text-[#19372e]">
-                            {item.title}
-                          </h3>
-                        )}
-                        <p className="mt-1.5 text-sm leading-6 text-[#6a7b74]">
-                          {item.detail}
-                        </p>
+            return (
+              <section key={category}>
+                <div className="mb-3 flex items-center gap-3">
+                  <h2 className="text-sm font-bold uppercase tracking-[0.13em] text-[#49635a]">
+                    {category}
+                  </h2>
+                  <span className="h-px flex-1 bg-[#dce4df]" />
+                  <span className="text-xs text-[#8d9a95]">
+                    {categoryItems.length}
+                  </span>
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {categoryItems.map((item) => (
+                    <article
+                      className={`rounded-[22px] border bg-white p-5 shadow-[0_14px_35px_-30px_rgba(23,63,53,0.75)] transition ${
+                        item.approval_state === "CANONICAL"
+                          ? "border-[#91c8ab] ring-2 ring-[#dff1e7]"
+                          : item.approval_state === "REJECTED"
+                            ? "border-[#e4d6d1] opacity-55"
+                            : "border-[#dce4df]"
+                      }`}
+                      key={item.id}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          {editingId === item.id ? (
+                            <div className="flex gap-2">
+                              <input
+                                aria-label={`Edit ${proposalTitle(item)}`}
+                                autoFocus
+                                className="min-w-0 flex-1 rounded-xl border border-[#a9c7b8] px-3 py-2 text-sm text-[#1c3b31] outline-none ring-[#dceee5] focus:ring-4"
+                                onChange={(event) =>
+                                  setDraftTitle(event.target.value)
+                                }
+                                value={draftTitle}
+                              />
+                              <button
+                                className="rounded-xl bg-[#245f4d] px-3 text-xs font-semibold text-white"
+                                onClick={() => saveEdit(item)}
+                                type="button"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          ) : (
+                            <h3 className="text-base font-semibold text-[#19372e]">
+                              {proposalTitle(item)}
+                            </h3>
+                          )}
+                          <p className="mt-1.5 text-sm leading-6 text-[#6a7b74]">
+                            {proposalDetail(item)}
+                          </p>
+                        </div>
+                        <StatusBadge status={item.approval_state} />
                       </div>
-                      <StatusBadge status={item.status} />
-                    </div>
 
-                    <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-[#edf0ed] pt-4">
-                      <button
-                        className="rounded-full bg-[#e4f3ea] px-3.5 py-2 text-xs font-semibold text-[#2c684f] transition hover:bg-[#cfe9da]"
-                        onClick={() => decide(item.id, "approved")}
-                        type="button"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        className="rounded-full border border-[#d7e1db] px-3.5 py-2 text-xs font-semibold text-[#566b63] transition hover:bg-[#f2f6f3]"
-                        onClick={() => startEditing(item)}
-                        type="button"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="rounded-full px-3.5 py-2 text-xs font-semibold text-[#9a5c4e] transition hover:bg-[#fbefeb]"
-                        onClick={() => decide(item.id, "rejected")}
-                        type="button"
-                      >
-                        Reject
-                      </button>
-                      {item.decision !== "pending" && (
-                        <span className="ml-auto text-[10px] font-bold uppercase tracking-[0.12em] text-[#84928d]">
-                          {item.decision}
-                        </span>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+                      <div className="mt-4 grid gap-2 rounded-2xl bg-[#f7f9f6] p-3 text-xs leading-5 text-[#60736b]">
+                        <p>
+                          <span className="font-semibold text-[#36594b]">
+                            Confidence:
+                          </span>{" "}
+                          {Math.round(item.confidence * 100)}%
+                        </p>
+                        <p>
+                          <span className="font-semibold text-[#36594b]">
+                            Evidence:
+                          </span>{" "}
+                          {item.evidence.map((evidence) => evidence.excerpt).join(" · ")}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-[#36594b]">
+                            Reasoning:
+                          </span>{" "}
+                          {item.reasoning_summary}
+                        </p>
+                        {item.clarification && (
+                          <div className="rounded-xl border border-[#ead6a9] bg-[#fff7e5] p-3 text-[#76541f]">
+                            <p className="font-semibold">
+                              {clarificationReasonLabel(item.clarification.reason)}
+                            </p>
+                            <p>{item.clarification.detail}</p>
+                            <p className="mt-1 font-medium">
+                              {item.clarification.question}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-[#edf0ed] pt-4">
+                        <button
+                          className="rounded-full bg-[#e4f3ea] px-3.5 py-2 text-xs font-semibold text-[#2c684f] transition hover:bg-[#cfe9da] disabled:cursor-not-allowed disabled:opacity-45"
+                          disabled={
+                            pendingId === item.id ||
+                            item.approval_state === "CANONICAL" ||
+                            Boolean(item.clarification)
+                          }
+                          onClick={() => void decide(item, "APPROVE")}
+                          title={
+                            item.clarification
+                              ? "Edit the proposal to resolve its clarification first."
+                              : undefined
+                          }
+                          type="button"
+                        >
+                          {pendingId === item.id ? "Saving…" : "Approve"}
+                        </button>
+                        <button
+                          className="rounded-full border border-[#d7e1db] px-3.5 py-2 text-xs font-semibold text-[#566b63] transition hover:bg-[#f2f6f3]"
+                          onClick={() => startEditing(item)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="rounded-full px-3.5 py-2 text-xs font-semibold text-[#9a5c4e] transition hover:bg-[#fbefeb] disabled:opacity-45"
+                          disabled={pendingId === item.id}
+                          onClick={() => void decide(item, "REJECT")}
+                          type="button"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
 
       <div className="mt-12 flex flex-col items-center justify-between gap-4 rounded-[24px] bg-[#173f35] p-5 text-white sm:flex-row sm:p-6">
         <div>

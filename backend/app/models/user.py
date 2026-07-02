@@ -16,6 +16,8 @@ if TYPE_CHECKING:
         Achievement,
         Education,
         Experience,
+        Program,
+        ProgramLink,
         Project,
         Skill,
         SkillLink,
@@ -45,6 +47,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
 
     preferences: Mapped[UserPreferences | None] = relationship(back_populates="user")
+    programs: Mapped[list[Program]] = relationship(back_populates="user")
+    program_links: Mapped[list[ProgramLink]] = relationship(back_populates="user")
     education: Mapped[list[Education]] = relationship(back_populates="user")
     experiences: Mapped[list[Experience]] = relationship(back_populates="user")
     projects: Mapped[list[Project]] = relationship(back_populates="user")

@@ -1,14 +1,15 @@
 import { KnowledgeSection } from "@/components/knowledge/knowledge-section";
 import {
   categoryOrder,
-  type KnowledgeItem,
 } from "@/lib/onboarding-data";
+import type { KnowledgeProposal } from "@/lib/knowledge-api";
+import { proposalCategory } from "@/lib/knowledge-api";
 
 export function KnowledgePanel({
   items,
   stage,
 }: {
-  items: KnowledgeItem[];
+  items: KnowledgeProposal[];
   stage: number;
 }) {
   return (
@@ -45,7 +46,7 @@ export function KnowledgePanel({
         {categoryOrder.map((category) => (
           <KnowledgeSection
             category={category}
-            items={items.filter((item) => item.category === category)}
+            items={items.filter((item) => proposalCategory(item) === category)}
             key={category}
           />
         ))}

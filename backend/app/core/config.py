@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     database_echo: bool = False
     database_pool_size: int = 5
     database_max_overflow: int = 10
+    reasoning_provider: str = "openai-compatible"
+    llm_api_key: str | None = None
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_model: str = "your-provider-model"
+    llm_timeout_seconds: float = 30.0
+    cors_origins: str = "http://localhost:3000"
 
 
 @lru_cache
