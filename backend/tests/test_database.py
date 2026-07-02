@@ -14,6 +14,8 @@ from app.db.base import Base
 EXPECTED_TABLES = {
     "users",
     "user_preferences",
+    "programs",
+    "program_links",
     "education",
     "experiences",
     "projects",
@@ -32,9 +34,10 @@ CANONICAL_SOFT_DELETE_TABLES = {
     "achievements",
     "skills",
     "evidence_items",
+    "programs",
 }
 
-APPEND_ONLY_TABLES = {"skill_links", "evidence_links"}
+APPEND_ONLY_TABLES = {"program_links", "skill_links", "evidence_links"}
 
 
 def test_mappers_and_sprint_two_tables_are_configured() -> None:

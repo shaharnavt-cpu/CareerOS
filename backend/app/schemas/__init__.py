@@ -1,1 +1,1 @@
-"""API schemas will be introduced in a later sprint."""
+"""Validated API contracts for CareerOS."""

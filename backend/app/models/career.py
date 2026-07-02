@@ -38,6 +38,71 @@ DATE_PRECISION_CHECK = (
 )
 
 
+class Program(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A structured program connecting multiple canonical knowledge types."""
+
+    __tablename__ = "programs"
+    __table_args__ = (
+        CheckConstraint(DATE_PRECISION_CHECK, name="date_precision_values"),
+        CheckConstraint(
+            "start_date IS NULL OR end_date IS NULL OR start_date <= end_date",
+            name="date_range",
+        ),
+        CheckConstraint(
+            "NOT is_current OR end_date IS NULL", name="current_has_no_end_date"
+        ),
+        Index("idx_programs_user_id", "user_id"),
+        Index("idx_programs_user_dates", "user_id", "start_date", "end_date"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    organization_name: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    categories: Mapped[list[str] | None] = mapped_column(JSONB)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    date_precision: Mapped[str | None] = mapped_column(Text)
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    program_url: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped[User] = relationship(back_populates="programs")
+    links: Mapped[list[ProgramLink]] = relationship(back_populates="program")
+
+
+class ProgramLink(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """Validated polymorphic link from a Program to canonical knowledge."""
+
+    __tablename__ = "program_links"
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('EDUCATION', 'EXPERIENCE', 'PROJECT', 'ACHIEVEMENT')",
+            name="entity_type_values",
+        ),
+        UniqueConstraint("program_id", "entity_type", "entity_id"),
+        Index("idx_program_links_program_id", "program_id"),
+        Index("idx_program_links_user_entity", "user_id", "entity_type", "entity_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    program_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("programs.id"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    relationship_type: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped[User] = relationship(back_populates="program_links")
+    program: Mapped[Program] = relationship(back_populates="links")
+
+
 class Education(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """A user's formal education record."""
 
@@ -241,7 +306,8 @@ class SkillLink(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "skill_links"
     __table_args__ = (
         CheckConstraint(
-            "entity_type IN ('PROJECT', 'EXPERIENCE', 'ACHIEVEMENT', 'EDUCATION')",
+            "entity_type IN ('PROGRAM', 'PROJECT', 'EXPERIENCE', 'ACHIEVEMENT', "
+            "'EDUCATION')",
             name="entity_type_values",
         ),
         CheckConstraint(

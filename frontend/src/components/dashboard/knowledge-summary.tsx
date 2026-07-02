@@ -1,12 +1,48 @@
-import { dashboardSummary } from "@/lib/onboarding-data";
+"use client";
 
-const strengthStyles: Record<string, string> = {
+import { useEffect, useMemo, useState } from "react";
+
+import { categoryOrder } from "@/lib/onboarding-data";
+import {
+  loadProposals,
+  type KnowledgeProposal,
+  proposalCategory,
+} from "@/lib/knowledge-api";
+
+const strengthStyles = {
   Strong: "bg-[#e5f4eb] text-[#2c694f]",
   Good: "bg-[#eaf3f7] text-[#35697e]",
   Review: "bg-[#fff3da] text-[#8a5b16]",
 };
 
 export function KnowledgeSummary() {
+  const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setProposals(loadProposals()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const summary = useMemo(
+    () =>
+      categoryOrder.map((label) => {
+        const items = proposals.filter(
+          (proposal) => proposalCategory(proposal) === label,
+        );
+        const canonical = items.filter(
+          (proposal) => proposal.approval_state === "CANONICAL",
+        ).length;
+        const strength =
+          items.length > 0 && canonical === items.length
+            ? "Strong"
+            : canonical > 0
+              ? "Good"
+              : "Review";
+        return { label, count: canonical, strength } as const;
+      }),
+    [proposals],
+  );
+  const total = summary.reduce((count, item) => count + item.count, 0);
+
   return (
     <section className="rounded-[26px] border border-[#dce4df] bg-white p-5 shadow-[0_20px_50px_-42px_rgba(20,58,46,0.7)] sm:p-6">
       <div className="flex items-end justify-between gap-4">
@@ -18,10 +54,12 @@ export function KnowledgeSummary() {
             Your career, organized
           </h2>
         </div>
-        <span className="text-xs font-semibold text-[#668078]">7 items</span>
+        <span className="text-xs font-semibold text-[#668078]">
+          {total} canonical
+        </span>
       </div>
       <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        {dashboardSummary.map((item) => (
+        {summary.map((item) => (
           <div
             className="flex items-center justify-between rounded-2xl border border-[#e4e9e5] bg-[#fafbf9] px-4 py-3"
             key={item.label}

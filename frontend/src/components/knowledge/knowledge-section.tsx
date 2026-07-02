@@ -1,8 +1,13 @@
 import { StatusBadge } from "@/components/common/status-badge";
 import type {
   KnowledgeCategory,
-  KnowledgeItem,
 } from "@/lib/onboarding-data";
+import {
+  clarificationReasonLabel,
+  type KnowledgeProposal,
+  proposalDetail,
+  proposalTitle,
+} from "@/lib/knowledge-api";
 
 const categoryIcons: Record<KnowledgeCategory, string> = {
   Education: "ED",
@@ -18,7 +23,7 @@ export function KnowledgeSection({
   items,
 }: {
   category: KnowledgeCategory;
-  items: KnowledgeItem[];
+  items: KnowledgeProposal[];
 }) {
   return (
     <section aria-labelledby={`knowledge-${category.toLowerCase()}`}>
@@ -50,16 +55,27 @@ export function KnowledgeSection({
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p className="text-sm font-semibold leading-5 text-[#1d3a31]">
-                  {item.title}
+                {proposalTitle(item)}
                 </p>
-                <StatusBadge status={item.status} />
+                <StatusBadge status={item.approval_state} />
               </div>
               <p className="mt-1.5 text-xs leading-5 text-[#6e7e78]">
-                {item.detail}
+                {proposalDetail(item)}
               </p>
-              {item.evidence && (
+              <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#73867e]">
+                <span>{Math.round(item.confidence * 100)}% confidence</span>
+                <span>·</span>
+                <span>{item.evidence.length} evidence</span>
+              </div>
+              {item.evidence[0] && (
                 <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#91a09a]">
-                  Source · {item.evidence}
+                  Source · {item.evidence[0].title}
+                </p>
+              )}
+              {item.clarification && (
+                <p className="mt-2 rounded-xl bg-[#fff7e5] px-3 py-2 text-xs leading-5 text-[#805b20]">
+                  {clarificationReasonLabel(item.clarification.reason)} ·{" "}
+                  {item.clarification.question}
                 </p>
               )}
             </article>

@@ -1,1 +1,1 @@
-"""Business services will be introduced in a later sprint."""
+"""Composable business services for CareerOS workflows."""

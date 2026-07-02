@@ -4,80 +4,82 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { ChatMessage } from "@/components/chat/chat-message";
 import {
-  assistantFollowUps,
   initialMessages,
+  quickReplies,
   type ChatMessage as ChatMessageType,
 } from "@/lib/onboarding-data";
 
-const quickReplies = [
-  "It was a selective research program",
-  "I wrote the Python analysis",
-  "I presented the results at AAS",
-];
-
-function mockTime(offset: number) {
-  return `9:${String(44 + offset).padStart(2, "0")} AM`;
+function currentTime() {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date());
 }
 
 export function ChatPanel({
-  onProgress,
+  onReason,
 }: {
-  onProgress: (stage: number) => void;
+  onReason: (message: string) => Promise<string>;
 }) {
   const [messages, setMessages] = useState<ChatMessageType[]>(initialMessages);
   const [input, setInput] = useState("");
   const [turn, setTurn] = useState(0);
   const [isReplying, setIsReplying] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, isReplying]);
 
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => timers.forEach(clearTimeout);
-  }, []);
-
-  function submitMessage(value: string) {
+  async function submitMessage(value: string) {
     const message = value.trim();
     if (!message || isReplying) return;
 
-    const nextTurn = Math.min(turn + 1, assistantFollowUps.length);
     setMessages((current) => [
       ...current,
       {
-        id: `user-${current.length}`,
+        id: `user-${crypto.randomUUID()}`,
         author: "user",
         body: message,
-        timestamp: mockTime(turn * 2),
+        timestamp: currentTime(),
       },
     ]);
     setInput("");
     setIsReplying(true);
 
-    const timer = setTimeout(() => {
+    try {
+      const reply = await onReason(message);
       setMessages((current) => [
         ...current,
         {
-          id: `assistant-${current.length}`,
+          id: `assistant-${crypto.randomUUID()}`,
           author: "assistant",
-          body: assistantFollowUps[Math.min(turn, assistantFollowUps.length - 1)],
-          timestamp: mockTime(turn * 2 + 1),
+          body: reply,
+          timestamp: currentTime(),
         },
       ]);
-      setTurn(nextTurn);
+      setTurn((current) => current + 1);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-error-${crypto.randomUUID()}`,
+          author: "assistant",
+          body:
+            error instanceof Error
+              ? `I couldn’t analyze that yet: ${error.message}`
+              : "I couldn’t analyze that yet. Please try again.",
+          timestamp: currentTime(),
+        },
+      ]);
+    } finally {
       setIsReplying(false);
-      onProgress(Math.min(nextTurn + 1, 3));
-    }, 520);
-
-    timersRef.current.push(timer);
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    submitMessage(input);
+    void submitMessage(input);
   }
 
   return (
@@ -96,7 +98,7 @@ export function ChatPanel({
           </div>
         </div>
         <span className="rounded-full bg-[#edf5f0] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#3f775f]">
-          Mock conversation
+          Reasoning active
         </span>
       </div>
 
@@ -136,7 +138,7 @@ export function ChatPanel({
               className="shrink-0 rounded-full border border-[#d6e2db] bg-[#f9fbf8] px-3 py-2 text-xs font-medium text-[#526a61] transition hover:border-[#92b9a8] hover:bg-[#edf7f1] disabled:opacity-50"
               disabled={isReplying}
               key={reply}
-              onClick={() => submitMessage(reply)}
+              onClick={() => void submitMessage(reply)}
               type="button"
             >
               {reply}
@@ -155,7 +157,7 @@ export function ChatPanel({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                submitMessage(input);
+                void submitMessage(input);
               }
             }}
             placeholder="Tell me what you did, what mattered, or what feels hard to classify…"
@@ -185,7 +187,7 @@ export function ChatPanel({
           </button>
         </form>
         <p className="mt-2 text-center text-[10px] text-[#9aa6a1]">
-          Mock experience · nothing is saved or sent
+          AI proposes · deterministic checks validate · you approve
         </p>
       </div>
     </section>

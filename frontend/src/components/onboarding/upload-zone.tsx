@@ -1,9 +1,34 @@
-const fileTypes = ["Resume", "CV", "Transcript", "LinkedIn PDF"];
+"use client";
+
+import { useRouter } from "next/navigation";
+import { ChangeEvent, useRef, useState } from "react";
+
+import { saveUploadedSource } from "@/lib/knowledge-api";
+
+const fileTypes = ["Text resume", "Markdown CV", "Transcript text"];
 
 export function UploadZone() {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [status, setStatus] = useState("Choose a text-based career document");
+
+  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setStatus(`Reading ${file.name}…`);
+    try {
+      const source = await file.text();
+      if (!source.trim()) throw new Error("The selected file is empty.");
+      saveUploadedSource(source);
+      router.push("/onboarding");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not read that file.");
+    }
+  }
+
   return (
     <div
-      aria-label="Document upload preview"
+      aria-label="Document upload"
       className="group relative overflow-hidden rounded-[28px] border border-dashed border-[#9cb8ad] bg-white/75 p-7 shadow-[0_24px_60px_-40px_rgba(31,64,53,0.55)] transition-colors hover:border-[#4f8a72] hover:bg-white"
     >
       <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-[#dff2e8] blur-2xl" />
@@ -28,9 +53,23 @@ export function UploadZone() {
           Bring what you already have
         </h2>
         <p className="mt-2 max-w-sm text-sm leading-6 text-[#677872]">
-          Drag and drop your career documents here, or choose files when upload
-          support arrives in a future sprint.
+          Upload a text-based resume or CV. CareerOS will turn its contents into
+          explainable proposals for your review.
         </p>
+        <input
+          accept=".txt,.md,.csv,text/plain,text/markdown,text/csv"
+          className="sr-only"
+          onChange={(event) => void handleFile(event)}
+          ref={inputRef}
+          type="file"
+        />
+        <button
+          className="mt-5 rounded-full bg-[#173f35] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#245b4b]"
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          Choose file
+        </button>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           {fileTypes.map((type) => (
             <span
@@ -41,8 +80,11 @@ export function UploadZone() {
             </span>
           ))}
         </div>
-        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#91a19b]">
-          UI preview · files are not uploaded
+        <p
+          aria-live="polite"
+          className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#71857c]"
+        >
+          {status}
         </p>
       </div>
     </div>
