@@ -2,8 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CareerOS",
-  description: "The foundation for your professional operating system.",
+  title: {
+    default: "CareerOS · Your professional memory",
+    template: "%s · CareerOS",
+  },
+  description:
+    "Build a structured career profile through a guided, conversation-first experience.",
 };
 
 export default function RootLayout({
@@ -13,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
