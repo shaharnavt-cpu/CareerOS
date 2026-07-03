@@ -22,10 +22,32 @@ class KnowledgeReasoningPipeline:
         self._extractor = extractor or EntityExtractor()
         self._proposal_builder = proposal_builder or ProposalBuilder()
 
+    @property
+    def provider_name(self) -> str:
+        """Expose safe provider metadata to upstream orchestrators."""
+
+        return self._provider.name
+
     async def run(self, request: ReasoningRequest) -> ReasoningResponse:
         source = self._normalizer.normalize(request)
         candidates = self._extractor.extract(source)
         assessments = await self._provider.reason(source, candidates)
+        if request.source_conflicts:
+            assessments = [
+                assessment.model_copy(
+                    update={
+                        "conflicting_evidence": list(
+                            dict.fromkeys(
+                                [
+                                    *assessment.conflicting_evidence,
+                                    *request.source_conflicts,
+                                ]
+                            )
+                        )
+                    }
+                )
+                for assessment in assessments
+            ]
         proposals = self._proposal_builder.build(
             source, candidates, assessments, request.existing_memory
         )

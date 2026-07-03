@@ -22,6 +22,7 @@ class SourceType(StrEnum):
     PORTFOLIO = "PORTFOLIO"
     GITHUB = "GITHUB"
     CERTIFICATE = "CERTIFICATE"
+    GENERIC_DOCUMENT = "GENERIC_DOCUMENT"
 
 
 class EntityType(StrEnum):
@@ -77,6 +78,10 @@ class EvidenceReference(BaseModel):
     excerpt: str = Field(min_length=1, max_length=4000)
     location: str | None = Field(default=None, max_length=256)
     verification_status: str = "UNVERIFIED"
+    evidence_id: uuid.UUID | None = None
+    category: str | None = Field(default=None, max_length=64)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    corroborated: bool = False
 
 
 class Clarification(BaseModel):
@@ -135,6 +140,7 @@ class ReasoningRequest(BaseModel):
     source_type: SourceType = SourceType.RESUME
     source_name: str = Field(default="Career source", min_length=1, max_length=256)
     existing_memory: list[ExistingMemoryItem] = Field(default_factory=list)
+    source_conflicts: list[str] = Field(default_factory=list)
 
 
 class ProcessingSummary(BaseModel):

@@ -11,6 +11,13 @@ from app.models.career import (
     SkillLink,
 )
 from app.models.evidence import EvidenceItem, EvidenceLink
+from app.models.listening import (
+    ListeningClusterMember,
+    ListeningEvidence,
+    ListeningEvidenceCluster,
+    ListeningProposalEvidenceLink,
+    ListeningSource,
+)
 from app.models.user import User, UserPreferences
 
 __all__ = [
@@ -19,6 +26,11 @@ __all__ = [
     "EvidenceItem",
     "EvidenceLink",
     "Experience",
+    "ListeningClusterMember",
+    "ListeningEvidence",
+    "ListeningEvidenceCluster",
+    "ListeningProposalEvidenceLink",
+    "ListeningSource",
     "Program",
     "ProgramLink",
     "Project",

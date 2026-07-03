@@ -24,6 +24,11 @@ EXPECTED_TABLES = {
     "skill_links",
     "evidence_items",
     "evidence_links",
+    "listening_sources",
+    "listening_evidence",
+    "listening_evidence_clusters",
+    "listening_cluster_members",
+    "listening_proposal_evidence_links",
 }
 
 CANONICAL_SOFT_DELETE_TABLES = {
@@ -37,7 +42,14 @@ CANONICAL_SOFT_DELETE_TABLES = {
     "programs",
 }
 
-APPEND_ONLY_TABLES = {"program_links", "skill_links", "evidence_links"}
+APPEND_ONLY_TABLES = {
+    "program_links",
+    "skill_links",
+    "evidence_links",
+    "listening_evidence",
+    "listening_cluster_members",
+    "listening_proposal_evidence_links",
+}
 
 
 def test_mappers_and_sprint_two_tables_are_configured() -> None:
