@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/common/status-badge";
 import { categoryOrder } from "@/lib/onboarding-data";
+import { evidenceCategoryLabel } from "@/lib/listening-utils";
 import {
   clarificationReasonLabel,
   loadProposals,
@@ -216,6 +217,43 @@ export function ReviewWorkspace() {
                           </span>{" "}
                           {item.evidence.map((evidence) => evidence.excerpt).join(" · ")}
                         </p>
+                        <div className="mt-1 space-y-2">
+                          {item.evidence.map((evidence, index) => (
+                            <div
+                              className="rounded-xl border border-[#dfe8e2] bg-white p-3"
+                              key={
+                                evidence.evidence_id ??
+                                `${evidence.source_id}-${index}`
+                              }
+                            >
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-semibold text-[#2f5d4d]">
+                                  {evidence.title}
+                                </span>
+                                <span className="rounded-full bg-[#edf4f0] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#5b756a]">
+                                  {evidenceCategoryLabel(evidence)}
+                                </span>
+                                {evidence.corroborated && (
+                                  <span className="rounded-full bg-[#e1f2e8] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#337057]">
+                                    Corroborated
+                                  </span>
+                                )}
+                              </div>
+                              <blockquote className="mt-1.5 border-l-2 border-[#a9cbbb] pl-2.5 text-[#526860]">
+                                “{evidence.excerpt}”
+                              </blockquote>
+                              <p className="mt-1 text-[10px] text-[#7b8d86]">
+                                {evidence.source_type.replaceAll("_", " ")}
+                                {evidence.location
+                                  ? ` · ${evidence.location}`
+                                  : ""}
+                                {evidence.confidence != null
+                                  ? ` · ${Math.round(evidence.confidence * 100)}% extraction confidence`
+                                  : ""}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
                         <p>
                           <span className="font-semibold text-[#36594b]">
                             Reasoning:

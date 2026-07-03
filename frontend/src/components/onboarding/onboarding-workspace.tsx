@@ -6,28 +6,53 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { KnowledgePanel } from "@/components/knowledge/knowledge-panel";
 import { sampleCareerSource } from "@/lib/onboarding-data";
+import { nextListeningStep } from "@/lib/listening-utils";
 import {
-  generateKnowledgeProposals,
+  generateListeningProposals,
   loadProposals,
-  mergeProposals,
   type KnowledgeProposal,
+  type PendingSource,
+  rememberListeningSource,
+  replacePendingProposals,
   saveProposals,
+  submitListeningSource,
   takeUploadedSource,
 } from "@/lib/knowledge-api";
+
+const listeningStages = [
+  "Listening to your source…",
+  "Finding education and experience…",
+  "Finding projects and skills…",
+  "Comparing evidence…",
+  "Preparing knowledge proposals…",
+];
 
 export function OnboardingWorkspace() {
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [listeningStep, setListeningStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const initialized = useRef(false);
 
   const addProposals = useCallback((incoming: KnowledgeProposal[]) => {
     setProposals((current) => {
-      const next = mergeProposals(current, incoming);
+      const next = replacePendingProposals(current, incoming);
       saveProposals(next);
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const interval = window.setInterval(
+      () =>
+        setListeningStep((current) =>
+          nextListeningStep(current, listeningStages.length),
+        ),
+      650,
+    );
+    return () => window.clearInterval(interval);
+  }, [isLoading]);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -37,7 +62,8 @@ export function OnboardingWorkspace() {
     async function initialize() {
       await Promise.resolve();
       const saved = loadProposals();
-      if (saved.length) {
+      const uploaded = takeUploadedSource();
+      if (saved.length && !uploaded) {
         if (!cancelled) {
           setProposals(saved);
           setIsLoading(false);
@@ -45,20 +71,23 @@ export function OnboardingWorkspace() {
         return;
       }
 
-      const uploaded = takeUploadedSource();
+      if (saved.length) setProposals(saved);
+      const source: PendingSource = uploaded ?? {
+        raw_text: sampleCareerSource,
+        source_type: "RESUME",
+        label: "Sprint 5 sample resume",
+      };
       try {
-        const result = await generateKnowledgeProposals({
-          raw_source: uploaded ?? sampleCareerSource,
-          source_type: "RESUME",
-          source_name: uploaded ? "Uploaded resume" : "Sprint 4 sample resume",
-        });
+        const ingestion = await submitListeningSource(source);
+        const sourceIds = rememberListeningSource(ingestion.source.id);
+        const result = await generateListeningProposals(sourceIds);
         if (!cancelled) addProposals(result.proposals);
       } catch (reason) {
         if (!cancelled) {
           setError(
             reason instanceof Error
               ? reason.message
-              : "The reasoning engine is unavailable.",
+              : "The listening engine is unavailable.",
           );
         }
       } finally {
@@ -73,19 +102,27 @@ export function OnboardingWorkspace() {
   }, [addProposals]);
 
   async function reasonAboutConversation(message: string) {
-    const result = await generateKnowledgeProposals({
-      raw_source: message,
-      source_type: "CONVERSATION",
-      source_name: "Guided Story conversation",
-    });
-    addProposals(result.proposals);
-    const clarification = result.proposals.find(
-      (proposal) => proposal.clarification,
-    )?.clarification;
-    if (clarification) return clarification.question;
-    return result.proposals.length
-      ? `I found ${result.proposals.length} explainable proposal${result.proposals.length === 1 ? "" : "s"}. Review the confidence and evidence beside our conversation.`
-      : "I didn’t find a complete career entity in that message. Try naming the experience, project, skill, or achievement you want to capture.";
+    setIsLoading(true);
+    setListeningStep(0);
+    try {
+      const ingestion = await submitListeningSource({
+        raw_text: message,
+        source_type: "CONVERSATION",
+        label: "Guided Story conversation",
+      });
+      const sourceIds = rememberListeningSource(ingestion.source.id);
+      const result = await generateListeningProposals(sourceIds);
+      addProposals(result.proposals);
+      const clarification = result.proposals.find(
+        (proposal) => proposal.clarification,
+      )?.clarification;
+      if (clarification) return clarification.question;
+      return result.proposals.length
+        ? `I found ${result.proposals.length} explainable proposal${result.proposals.length === 1 ? "" : "s"}. Review the source evidence beside our conversation.`
+        : "I didn’t find a complete career entity in that message. Try naming the experience, project, skill, or achievement you want to capture.";
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -99,7 +136,16 @@ export function OnboardingWorkspace() {
             Speak naturally. CareerOS organizes the details beside you.
           </p>
           {isLoading && (
-            <p className="mt-1 text-xs text-[#6f887e]">Analyzing source evidence…</p>
+            <div
+              aria-live="polite"
+              className="mt-2 flex items-center gap-2 text-xs font-medium text-[#4e7a68]"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#55a47f] opacity-40" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#4a9b76]" />
+              </span>
+              {listeningStages[listeningStep]}
+            </div>
           )}
           {error && (
             <p className="mt-1 text-xs font-medium text-[#9a5c4e]">{error}</p>

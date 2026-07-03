@@ -117,7 +117,8 @@ export function ChatPanel({
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-[#173f35] text-[10px] font-bold text-white">
               CO
             </span>
-            <span className="flex gap-1 rounded-2xl rounded-tl-md border border-[#dce5df] bg-white px-4 py-3">
+            <span className="flex items-center gap-2 rounded-2xl rounded-tl-md border border-[#dce5df] bg-white px-4 py-3 text-xs font-medium text-[#658078]">
+              Listening to your story
               {[0, 1, 2].map((dot) => (
                 <span
                   className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#6d8d80]"

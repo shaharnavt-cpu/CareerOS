@@ -1,4 +1,5 @@
 import type { KnowledgeCategory } from "@/lib/onboarding-data";
+import { mergeById, replacePendingById } from "@/lib/listening-utils";
 
 export type EntityType =
   | "EDUCATION"
@@ -23,7 +24,8 @@ export type SourceType =
   | "LINKEDIN"
   | "PORTFOLIO"
   | "GITHUB"
-  | "CERTIFICATE";
+  | "CERTIFICATE"
+  | "GENERIC_DOCUMENT";
 
 export type EvidenceReference = {
   source_id: string;
@@ -32,6 +34,10 @@ export type EvidenceReference = {
   excerpt: string;
   location?: string | null;
   verification_status: string;
+  evidence_id?: string | null;
+  category?: string | null;
+  confidence?: number | null;
+  corroborated: boolean;
 };
 
 export type Clarification = {
@@ -76,6 +82,51 @@ const apiBase =
   "http://localhost:8000";
 const proposalStorageKey = "careeros.knowledge-proposals";
 const sourceStorageKey = "careeros.uploaded-source";
+const listeningSourceIdsKey = "careeros.listening-source-ids";
+
+export type PendingSource = {
+  raw_text: string;
+  source_type: SourceType;
+  label: string;
+  original_filename?: string;
+  media_type?: string;
+};
+
+export type ListeningSource = {
+  id: string;
+  source_type: SourceType;
+  label: string;
+  original_filename?: string | null;
+  status: "RECEIVED" | "LISTENING" | "READY" | "FAILED";
+  evidence_count: number;
+};
+
+export async function submitListeningSource(
+  input: PendingSource,
+): Promise<{ source: ListeningSource }> {
+  const response = await fetch(`${apiBase}/api/listening/sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseResponse(response);
+}
+
+export async function generateListeningProposals(
+  sourceIds: string[],
+): Promise<{
+  proposals: KnowledgeProposal[];
+  clusters_considered: number;
+  evidence_considered: number;
+  provider: string;
+}> {
+  const response = await fetch(`${apiBase}/api/listening/proposals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_ids: sourceIds }),
+  });
+  return parseResponse(response);
+}
 
 export async function generateKnowledgeProposals(input: {
   raw_source: string;
@@ -114,9 +165,35 @@ export function mergeProposals(
   current: KnowledgeProposal[],
   incoming: KnowledgeProposal[],
 ): KnowledgeProposal[] {
-  const merged = new Map(current.map((proposal) => [proposal.id, proposal]));
-  incoming.forEach((proposal) => merged.set(proposal.id, proposal));
-  return [...merged.values()];
+  return mergeById(current, incoming);
+}
+
+export function replacePendingProposals(
+  current: KnowledgeProposal[],
+  incoming: KnowledgeProposal[],
+): KnowledgeProposal[] {
+  return replacePendingById(current, incoming);
+}
+
+export function rememberListeningSource(sourceId: string): string[] {
+  const ids = loadListeningSourceIds();
+  const next = [...new Set([...ids, sourceId])];
+  window.sessionStorage.setItem(listeningSourceIdsKey, JSON.stringify(next));
+  return next;
+}
+
+function loadListeningSourceIds(): string[] {
+  if (typeof window === "undefined") return [];
+  const value = window.sessionStorage.getItem(listeningSourceIdsKey);
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 export function saveProposals(proposals: KnowledgeProposal[]) {
@@ -136,14 +213,25 @@ export function loadProposals(): KnowledgeProposal[] {
   }
 }
 
-export function saveUploadedSource(source: string) {
-  window.sessionStorage.setItem(sourceStorageKey, source);
+export function saveUploadedSource(source: PendingSource) {
+  window.sessionStorage.setItem(sourceStorageKey, JSON.stringify(source));
 }
 
-export function takeUploadedSource(): string | null {
+export function takeUploadedSource(): PendingSource | null {
   const source = window.sessionStorage.getItem(sourceStorageKey);
   window.sessionStorage.removeItem(sourceStorageKey);
-  return source;
+  if (!source) return null;
+  try {
+    const parsed = JSON.parse(source) as PendingSource;
+    if (parsed.raw_text && parsed.source_type && parsed.label) return parsed;
+  } catch {
+    return {
+      raw_text: source,
+      source_type: "RESUME",
+      label: "Uploaded resume",
+    };
+  }
+  return null;
 }
 
 const categories: Record<EntityType, KnowledgeCategory> = {
