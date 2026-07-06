@@ -29,6 +29,10 @@ EXPECTED_TABLES = {
     "listening_evidence_clusters",
     "listening_cluster_members",
     "listening_proposal_evidence_links",
+    "stories",
+    "story_chapters",
+    "story_memberships",
+    "story_evidence",
 }
 
 CANONICAL_SOFT_DELETE_TABLES = {
@@ -40,6 +44,8 @@ CANONICAL_SOFT_DELETE_TABLES = {
     "skills",
     "evidence_items",
     "programs",
+    "stories",
+    "story_chapters",
 }
 
 APPEND_ONLY_TABLES = {
@@ -49,6 +55,8 @@ APPEND_ONLY_TABLES = {
     "listening_evidence",
     "listening_cluster_members",
     "listening_proposal_evidence_links",
+    "story_memberships",
+    "story_evidence",
 }
 
 
