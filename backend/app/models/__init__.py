@@ -18,6 +18,7 @@ from app.models.listening import (
     ListeningProposalEvidenceLink,
     ListeningSource,
 )
+from app.models.story import Story, StoryChapter, StoryEvidence, StoryMembership
 from app.models.user import User, UserPreferences
 
 __all__ = [
@@ -36,6 +37,10 @@ __all__ = [
     "Project",
     "Skill",
     "SkillLink",
+    "Story",
+    "StoryChapter",
+    "StoryEvidence",
+    "StoryMembership",
     "User",
     "UserPreferences",
 ]

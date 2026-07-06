@@ -49,6 +49,12 @@ export function DashboardShell() {
         >
           Continue Guided Story
         </Link>
+        <Link
+          className="inline-flex min-h-11 items-center justify-center rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white transition hover:bg-[#285b4a]"
+          href="/stories"
+        >
+          Open Story Workspace
+        </Link>
       </div>
 
       <div className="mt-9 grid gap-5 lg:grid-cols-2">

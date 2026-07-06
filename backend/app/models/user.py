@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         SkillLink,
     )
     from app.models.evidence import EvidenceItem, EvidenceLink
+    from app.models.story import Story
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -57,6 +58,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     skill_links: Mapped[list[SkillLink]] = relationship(back_populates="user")
     evidence_items: Mapped[list[EvidenceItem]] = relationship(back_populates="user")
     evidence_links: Mapped[list[EvidenceLink]] = relationship(back_populates="user")
+    stories: Mapped[list[Story]] = relationship(back_populates="user")
 
 
 class UserPreferences(UUIDPrimaryKeyMixin, TimestampMixin, Base):
