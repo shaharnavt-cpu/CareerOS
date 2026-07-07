@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  DragEvent,
+  FormEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { ChatMessage } from "@/components/chat/chat-message";
 import {
@@ -18,14 +25,19 @@ function currentTime() {
 
 export function ChatPanel({
   onReason,
+  onAttach,
 }: {
   onReason: (message: string) => Promise<string>;
+  onAttach: (files: File[]) => Promise<void>;
 }) {
   const [messages, setMessages] = useState<ChatMessageType[]>(initialMessages);
   const [input, setInput] = useState("");
   const [turn, setTurn] = useState(0);
   const [isReplying, setIsReplying] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isAttaching, setIsAttaching] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -82,8 +94,54 @@ export function ChatPanel({
     void submitMessage(input);
   }
 
+  async function attachFiles(files: File[]) {
+    if (!files.length) return;
+    setIsAttaching(true);
+    try {
+      await onAttach(files);
+    } finally {
+      setIsAttaching(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    void attachFiles(Array.from(event.target.files ?? []));
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    void attachFiles(Array.from(event.dataTransfer.files));
+  }
+
   return (
-    <section className="flex min-h-[680px] flex-col overflow-hidden rounded-[26px] border border-[#d9e3dc] bg-[#f3f6f2] shadow-[0_24px_70px_-48px_rgba(20,58,46,0.65)] lg:h-[calc(100vh-7.5rem)] lg:min-h-0">
+    <section
+      className={`relative flex min-h-[680px] flex-col overflow-hidden rounded-[26px] border bg-[#f3f6f2] shadow-[0_24px_70px_-48px_rgba(20,58,46,0.65)] lg:h-[calc(100vh-7.5rem)] lg:min-h-0 ${isDragging ? "border-[#559779] ring-4 ring-[#cfe9dc]" : "border-[#d9e3dc]"}`}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setIsDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+          setIsDragging(false);
+        }
+      }}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center bg-[#edf8f2]/90 backdrop-blur-sm">
+          <div className="rounded-3xl border border-[#9dc8b3] bg-white px-8 py-6 text-center shadow-xl">
+            <p className="text-sm font-semibold text-[#245440]">
+              Drop your sources here
+            </p>
+            <p className="mt-1 text-xs text-[#70817a]">
+              PDF, DOCX, TXT, Markdown, or CSV
+            </p>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4 border-b border-[#dde5df] bg-white/85 px-5 py-4 backdrop-blur">
         <div className="flex items-center gap-3">
           <span className="relative grid h-10 w-10 place-items-center rounded-2xl bg-[#173f35] text-xs font-bold text-white">
@@ -147,6 +205,40 @@ export function ChatPanel({
           ))}
         </div>
         <form className="flex items-end gap-2" onSubmit={handleSubmit}>
+          <input
+            accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
+            className="sr-only"
+            multiple
+            onChange={handleFileChange}
+            ref={fileInputRef}
+            type="file"
+          />
+          <button
+            aria-label="Attach professional documents"
+            className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-[#d5dfd9] bg-[#f7faf7] text-[#456b5b] transition hover:border-[#88ad9c] hover:bg-[#edf7f1] disabled:opacity-50"
+            disabled={isAttaching}
+            onClick={() => fileInputRef.current?.click()}
+            type="button"
+          >
+            {isAttaching ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#a9c7b8] border-t-[#356a54]" />
+            ) : (
+              <svg
+                aria-hidden="true"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  d="M9.5 12.5l5.4-5.4a3 3 0 114.2 4.2l-7.5 7.5a5 5 0 01-7.1-7.1l7.8-7.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
           <label className="sr-only" htmlFor="guided-story-input">
             Tell CareerOS about your story
           </label>
@@ -188,7 +280,7 @@ export function ChatPanel({
           </button>
         </form>
         <p className="mt-2 text-center text-[10px] text-[#9aa6a1]">
-          AI proposes · deterministic checks validate · you approve
+          Attach evidence anytime · keep chatting while CareerOS listens
         </p>
       </div>
     </section>

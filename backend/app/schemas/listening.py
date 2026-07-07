@@ -145,3 +145,41 @@ class ListeningProposalResponse(BaseModel):
     clusters_considered: int
     evidence_considered: int
     provider: str
+
+
+class ListeningJobStage(StrEnum):
+    """Public progress states for a background listening job."""
+
+    QUEUED = "QUEUED"
+    READING = "READING"
+    EXTRACTING_EVIDENCE = "EXTRACTING_EVIDENCE"
+    COMPARING_SOURCES = "COMPARING_SOURCES"
+    PREPARING_PROPOSALS = "PREPARING_PROPOSALS"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class ListeningJobResponse(BaseModel):
+    """Safe, pollable state for one uploaded source."""
+
+    id: uuid.UUID
+    filename: str
+    media_type: str | None = None
+    stage: ListeningJobStage
+    progress: int = Field(ge=0, le=100)
+    message: str
+    attempt: int = Field(ge=1)
+    source_id: uuid.UUID | None = None
+    source_type: SourceType | None = None
+    document_type: str | None = None
+    detection_confidence: float | None = Field(default=None, ge=0, le=1)
+    evidence_count: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ListeningUploadResponse(BaseModel):
+    """Jobs created by one multi-file attachment request."""
+
+    jobs: list[ListeningJobResponse]

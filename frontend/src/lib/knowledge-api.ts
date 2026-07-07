@@ -101,6 +101,60 @@ export type ListeningSource = {
   evidence_count: number;
 };
 
+export type ListeningJobStage =
+  | "QUEUED"
+  | "READING"
+  | "EXTRACTING_EVIDENCE"
+  | "COMPARING_SOURCES"
+  | "PREPARING_PROPOSALS"
+  | "COMPLETE"
+  | "FAILED";
+
+export type ListeningJob = {
+  id: string;
+  filename: string;
+  media_type?: string | null;
+  stage: ListeningJobStage;
+  progress: number;
+  message: string;
+  attempt: number;
+  source_id?: string | null;
+  source_type?: SourceType | null;
+  document_type?: string | null;
+  detection_confidence?: number | null;
+  evidence_count: number;
+  error_code?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function uploadListeningFiles(
+  files: File[],
+): Promise<{ jobs: ListeningJob[] }> {
+  const body = new FormData();
+  files.forEach((file) => body.append("files", file, file.name));
+  const response = await fetch(`${apiBase}/api/listening/uploads`, {
+    method: "POST",
+    body,
+  });
+  return parseResponse(response);
+}
+
+export async function listListeningJobs(): Promise<ListeningJob[]> {
+  const response = await fetch(`${apiBase}/api/listening/jobs`, {
+    cache: "no-store",
+  });
+  return parseResponse(response);
+}
+
+export async function retryListeningJob(jobId: string): Promise<ListeningJob> {
+  const response = await fetch(
+    `${apiBase}/api/listening/jobs/${jobId}/retry`,
+    { method: "POST" },
+  );
+  return parseResponse(response);
+}
+
 export async function submitListeningSource(
   input: PendingSource,
 ): Promise<{ source: ListeningSource }> {
