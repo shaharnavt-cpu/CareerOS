@@ -3,22 +3,34 @@
 import uuid
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.knowledge import get_reasoning_pipeline
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.schemas.knowledge import DEMO_USER_ID
 from app.schemas.listening import (
     EvidenceCluster,
     EvidenceObject,
+    ListeningJobResponse,
     ListeningProposalRequest,
     ListeningProposalResponse,
     ListeningSourceSummary,
+    ListeningUploadResponse,
     SourceIngestionResponse,
     SourceSubmission,
 )
+from app.services.document_adapters import (
+    MAX_DOCUMENT_BYTES,
+    MAX_UPLOAD_FILES,
+    RawDocument,
+)
 from app.services.listening import ListeningEngine, ListeningReasoningBridge
+from app.services.listening_queue import (
+    ListeningJob,
+    ListeningQueue,
+    UniversalListeningProcessor,
+)
 from app.services.listening_repository import ListeningRepository
 from app.services.llm import ReasoningProviderError
 from app.services.pipeline import KnowledgeReasoningPipeline
@@ -36,10 +48,122 @@ def get_listening_repository() -> ListeningRepository:
     return ListeningRepository()
 
 
+@lru_cache
+def get_listening_queue() -> ListeningQueue:
+    """Return the process-local FIFO worker used for document attachments."""
+
+    return ListeningQueue(UniversalListeningProcessor(SessionLocal))
+
+
+def _job_response(job: ListeningJob) -> ListeningJobResponse:
+    return ListeningJobResponse(
+        id=job.id,
+        filename=job.document.filename,
+        media_type=job.document.media_type,
+        stage=job.stage.value,
+        progress=job.progress,
+        message=job.message,
+        attempt=job.attempt,
+        source_id=job.source_id,
+        source_type=job.source_type,
+        document_type=job.document_type,
+        detection_confidence=job.detection_confidence,
+        evidence_count=job.evidence_count,
+        error_code=job.error_code,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
 def get_listening_bridge(
     pipeline: KnowledgeReasoningPipeline = Depends(get_reasoning_pipeline),
 ) -> ListeningReasoningBridge:
     return ListeningReasoningBridge(pipeline)
+
+
+@router.post(
+    "/uploads",
+    response_model=ListeningUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def upload_sources(
+    files: list[UploadFile] = File(...),
+    listening_queue: ListeningQueue = Depends(get_listening_queue),
+) -> ListeningUploadResponse:
+    """Queue multiple professional artifacts and return immediately."""
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Attach at least one document for CareerOS to listen to.",
+        )
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Attach up to {MAX_UPLOAD_FILES} files at a time.",
+        )
+
+    jobs = []
+    for upload in files:
+        filename = upload.filename or "untitled"
+        content = await upload.read(MAX_DOCUMENT_BYTES + 1)
+        jobs.append(
+            listening_queue.enqueue(
+                RawDocument(
+                    filename=filename,
+                    content=content,
+                    media_type=upload.content_type,
+                )
+            )
+        )
+        await upload.close()
+    return ListeningUploadResponse(jobs=[_job_response(job) for job in jobs])
+
+
+@router.get("/jobs", response_model=list[ListeningJobResponse])
+def list_listening_jobs(
+    listening_queue: ListeningQueue = Depends(get_listening_queue),
+) -> list[ListeningJobResponse]:
+    """List upload queue state for source management and progress recovery."""
+
+    return [_job_response(job) for job in listening_queue.list()]
+
+
+@router.get("/jobs/{job_id}", response_model=ListeningJobResponse)
+def get_listening_job(
+    job_id: uuid.UUID,
+    listening_queue: ListeningQueue = Depends(get_listening_queue),
+) -> ListeningJobResponse:
+    """Poll one queued source without exposing its raw content."""
+
+    try:
+        return _job_response(listening_queue.get(job_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That listening job is no longer available.",
+        ) from exc
+
+
+@router.post("/jobs/{job_id}/retry", response_model=ListeningJobResponse)
+def retry_listening_job(
+    job_id: uuid.UUID,
+    listening_queue: ListeningQueue = Depends(get_listening_queue),
+) -> ListeningJobResponse:
+    """Retry a failed in-process listening job with the original bytes."""
+
+    try:
+        return _job_response(listening_queue.retry(job_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That listening job is no longer available.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed listening jobs can be retried.",
+        ) from exc
 
 
 @router.post("/sources", response_model=SourceIngestionResponse)

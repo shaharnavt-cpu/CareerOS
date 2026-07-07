@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   evidenceCategoryLabel,
+  listeningStageLabel,
   mergeById,
   nextListeningStep,
   replacePendingById,
+  validateListeningAttachments,
 } from "./listening-utils.ts";
 
 test("mergeById keeps prior proposals and replaces matching ids", () => {
@@ -50,4 +52,29 @@ test("a fresh multi-source pass replaces stale pending proposals", () => {
     result.map((item) => item.id),
     ["kept", "fused"],
   );
+});
+
+test("composer accepts supported multiple attachments without manual classification", () => {
+  const files = [
+    { name: "resume.pdf", size: 1200 },
+    { name: "transcript.docx", size: 2400 },
+    { name: "projects.csv", size: 800 },
+  ] as File[];
+
+  assert.equal(validateListeningAttachments(files), null);
+  assert.match(
+    validateListeningAttachments([
+      { name: "headshot.png", size: 200 } as File,
+    ]) ?? "",
+    /isn’t supported yet/,
+  );
+});
+
+test("queue progress uses clear user-facing stage labels", () => {
+  assert.equal(listeningStageLabel("QUEUED"), "Queued");
+  assert.equal(
+    listeningStageLabel("EXTRACTING_EVIDENCE"),
+    "Extracting evidence",
+  );
+  assert.equal(listeningStageLabel("FAILED"), "Needs attention");
 });

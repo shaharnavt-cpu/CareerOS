@@ -1,7 +1,6 @@
 import Link from "next/link";
 
 import { Brand } from "@/components/common/brand";
-import { UploadZone } from "@/components/onboarding/upload-zone";
 
 const principles = [
   "Tell your story naturally",
@@ -72,11 +71,47 @@ export function WelcomeScreen() {
                 Nothing saves without approval
               </p>
             </div>
-            <UploadZone />
-            <div className="mx-auto mt-5 flex max-w-md items-center justify-center gap-3 text-xs text-[#76867f]">
-              <span className="h-px flex-1 bg-[#d9e1dc]" />
-              or simply start talking
-              <span className="h-px flex-1 bg-[#d9e1dc]" />
+            <div className="relative overflow-hidden rounded-[28px] border border-[#c5d7ce] bg-white/85 p-7 shadow-[0_24px_60px_-40px_rgba(31,64,53,0.55)]">
+              <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-[#dff2e8] blur-3xl" />
+              <div className="relative">
+                <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#edf7f1] text-[#2f7158] ring-1 ring-[#cfe5d9]">
+                  <svg
+                    aria-hidden="true"
+                    className="h-6 w-6"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M9.5 12.5l5.4-5.4a3 3 0 114.2 4.2l-7.5 7.5a5 5 0 01-7.1-7.1l7.8-7.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <h2 className="mt-5 text-xl font-semibold text-[#17362d]">
+                  Bring what you already have
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-[#677872]">
+                  Drop resumes, transcripts, certificates, papers, portfolios,
+                  or job descriptions directly into the conversation. No separate
+                  upload ritual. No manual classification.
+                </p>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {["PDF", "DOCX", "TXT", "Markdown", "CSV"].map((format) => (
+                    <span
+                      className="rounded-full border border-[#d7e3dc] bg-[#f8fbf8] px-3 py-1.5 text-[11px] font-semibold text-[#4e6f61]"
+                      key={format}
+                    >
+                      {format}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-5 text-xs font-medium text-[#4e7f69]">
+                  Your conversation stays open while every source is heard.
+                </p>
+              </div>
             </div>
           </div>
         </section>
