@@ -6,8 +6,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { KnowledgePanel } from "@/components/knowledge/knowledge-panel";
 import { SourceListeningPanel } from "@/components/onboarding/source-listening-panel";
-import { mergeById, validateListeningAttachments } from "@/lib/listening-utils";
 import {
+  friendlyFailureMessage,
+  mergeById,
+  validateListeningAttachments,
+} from "@/lib/listening-utils";
+import {
+  CareerOSApiError,
   generateListeningProposals,
   listListeningJobs,
   loadProposals,
@@ -21,13 +26,12 @@ import {
   uploadListeningFiles,
 } from "@/lib/knowledge-api";
 
-const activeStages = new Set([
-  "QUEUED",
-  "READING",
-  "EXTRACTING_EVIDENCE",
-  "COMPARING_SOURCES",
-  "PREPARING_PROPOSALS",
-]);
+function errorMessage(reason: unknown, fallback: string) {
+  if (reason instanceof CareerOSApiError) {
+    return friendlyFailureMessage(reason.code) || reason.message;
+  }
+  return reason instanceof Error ? reason.message : fallback;
+}
 
 export function OnboardingWorkspace() {
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
@@ -49,33 +53,20 @@ export function OnboardingWorkspace() {
   }, []);
 
   const processCompletedJobs = useCallback(
-    async (incoming: ListeningJob[]) => {
+    (incoming: ListeningJob[]) => {
       const completed = incoming.filter(
         (job) =>
-          job.stage === "COMPLETE" &&
+          job.status === "COMPLETE" &&
           job.source_id &&
           !processedJobs.current.has(job.id),
       );
       if (!completed.length) return;
 
       completed.forEach((job) => processedJobs.current.add(job.id));
-      const sourceIds = completed.reduce<string[]>((ids, job) => {
-        if (!job.source_id) return ids;
-        return rememberListeningSource(job.source_id);
-      }, []);
-      if (!sourceIds.length) return;
-
-      try {
-        const result = await generateListeningProposals(sourceIds);
-        addProposals(result.proposals);
-      } catch (reason) {
-        completed.forEach((job) => processedJobs.current.delete(job.id));
-        setSourceError(
-          reason instanceof Error
-            ? reason.message
-            : "CareerOS could not prepare proposals from those sources yet.",
-        );
-      }
+      completed.forEach((job) => {
+        if (job.source_id) rememberListeningSource(job.source_id);
+      });
+      addProposals(completed.flatMap((job) => job.proposals));
     },
     [addProposals],
   );
@@ -83,7 +74,7 @@ export function OnboardingWorkspace() {
   const synchronizeJobs = useCallback(
     (incoming: ListeningJob[]) => {
       setJobs(incoming.filter((job) => !hiddenJobs.current.has(job.id)));
-      void processCompletedJobs(incoming);
+      processCompletedJobs(incoming);
     },
     [processCompletedJobs],
   );
@@ -101,7 +92,9 @@ export function OnboardingWorkspace() {
       });
   }, [synchronizeJobs]);
 
-  const hasActiveJobs = jobs.some((job) => activeStages.has(job.stage));
+  const hasActiveJobs = jobs.some(
+    (job) => job.status === "QUEUED" || job.status === "ACTIVE",
+  );
   useEffect(() => {
     if (!hasActiveJobs) return;
     const timeout = window.setTimeout(() => {
@@ -126,13 +119,9 @@ export function OnboardingWorkspace() {
     try {
       const response = await uploadListeningFiles(files);
       setJobs((current) => mergeById(response.jobs, current));
-      void processCompletedJobs(response.jobs);
+      processCompletedJobs(response.jobs);
     } catch (reason) {
-      setSourceError(
-        reason instanceof Error
-          ? reason.message
-          : "CareerOS could not queue those documents.",
-      );
+      setSourceError(errorMessage(reason, "CareerOS could not queue those documents."));
     }
   }
 
@@ -143,11 +132,7 @@ export function OnboardingWorkspace() {
       processedJobs.current.delete(jobId);
       setJobs((current) => mergeById(current, [retried]));
     } catch (reason) {
-      setSourceError(
-        reason instanceof Error
-          ? reason.message
-          : "CareerOS could not retry that source.",
-      );
+      setSourceError(errorMessage(reason, "CareerOS could not retry that source."));
     }
   }
 
