@@ -114,10 +114,10 @@ def upgrade() -> None:
     )
 
     op.drop_constraint(
-        "ck_skill_links_entity_type_values", "skill_links", type_="check"
+        op.f("ck_skill_links_entity_type_values"), "skill_links", type_="check"
     )
     op.create_check_constraint(
-        "ck_skill_links_entity_type_values",
+        op.f("ck_skill_links_entity_type_values"),
         "skill_links",
         "entity_type IN ('PROGRAM', 'PROJECT', 'EXPERIENCE', 'ACHIEVEMENT', "
         "'EDUCATION')",
@@ -128,10 +128,10 @@ def downgrade() -> None:
     """Remove Program persistence and restore the original skill-link check."""
 
     op.drop_constraint(
-        "ck_skill_links_entity_type_values", "skill_links", type_="check"
+        op.f("ck_skill_links_entity_type_values"), "skill_links", type_="check"
     )
     op.create_check_constraint(
-        "ck_skill_links_entity_type_values",
+        op.f("ck_skill_links_entity_type_values"),
         "skill_links",
         "entity_type IN ('PROJECT', 'EXPERIENCE', 'ACHIEVEMENT', 'EDUCATION')",
     )
