@@ -53,12 +53,38 @@ export function validateListeningAttachments(files: File[]): string | null {
 
 export function listeningStageLabel(stage: string): string {
   return {
-    QUEUED: "Queued",
-    READING: "Reading",
-    EXTRACTING_EVIDENCE: "Extracting evidence",
-    COMPARING_SOURCES: "Comparing sources",
-    PREPARING_PROPOSALS: "Preparing proposals",
+    UPLOAD: "Uploaded",
+    DETECT_DOCUMENT_TYPE: "Document type detected",
+    PARSE_DOCUMENT: "Document parsed",
+    EXTRACT_TEXT: "Text extracted",
+    CREATE_EVIDENCE: "Evidence created",
+    PERSIST_EVIDENCE: "Saving to Career Memory",
+    COMPARE_KNOWLEDGE: "Comparing with existing knowledge",
+    GENERATE_PROPOSALS: "Generating proposals",
     COMPLETE: "Complete",
-    FAILED: "Needs attention",
   }[stage] ?? stage.replaceAll("_", " ").toLowerCase();
+}
+
+export function friendlyFailureMessage(code: string): string {
+  return {
+    DATABASE_UNAVAILABLE:
+      "Career Memory is temporarily unavailable. Your parsed document is safe—retry when PostgreSQL is ready.",
+    DATABASE_TIMEOUT:
+      "Career Memory took too long to respond. Your parsed document is safe—retry when PostgreSQL is ready.",
+    DATABASE_CONSTRAINT_FAILURE:
+      "CareerOS found conflicting stored evidence. Your parsed document is safe and can be retried.",
+    PERSISTENCE_FAILURE:
+      "CareerOS couldn’t save this evidence. Your parsed document is safe and can be retried.",
+    PARSER_FAILED:
+      "CareerOS couldn’t parse this file. Export a fresh copy and try again.",
+    EMPTY_DOCUMENT: "This document is empty. Add content or choose another file.",
+    NO_TEXT_FOUND:
+      "No readable text was found. This may be a scanned document that needs OCR.",
+    PROPOSAL_FAILURE:
+      "Your evidence is saved, but proposals could not be prepared yet. Retry when ready.",
+    REASONING_FAILURE:
+      "Your evidence is saved, but reasoning is temporarily unavailable. Retry when ready.",
+    API_UNAVAILABLE:
+      "CareerOS can’t reach the listening service. Check that the backend is running.",
+  }[code] ?? "CareerOS stopped at this stage. Completed work is still available.";
 }

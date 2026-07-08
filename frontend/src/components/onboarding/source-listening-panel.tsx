@@ -1,7 +1,19 @@
 "use client";
 
-import type { ListeningJob } from "@/lib/knowledge-api";
-import { listeningStageLabel } from "@/lib/listening-utils";
+import Link from "next/link";
+
+import type { ListeningJob, StageTiming } from "@/lib/knowledge-api";
+import {
+  friendlyFailureMessage,
+  listeningStageLabel,
+} from "@/lib/listening-utils";
+
+function stageIcon(stage: StageTiming) {
+  if (stage.status === "COMPLETE") return "✓";
+  if (stage.status === "ACTIVE") return "→";
+  if (stage.status === "FAILED") return "!";
+  return "○";
+}
 
 export function SourceListeningPanel({
   jobs,
@@ -21,12 +33,15 @@ export function SourceListeningPanel({
             Listening continues while you chat.
           </p>
         </div>
-        <span className="rounded-full bg-[#edf5f0] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#4a7a65]">
-          {jobs.length} {jobs.length === 1 ? "source" : "sources"}
-        </span>
+        <Link
+          className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#4a7a65] hover:text-[#285943]"
+          href="/listening"
+        >
+          Diagnostics
+        </Link>
       </div>
 
-      <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+      <div className="mt-3 max-h-[32rem] space-y-2 overflow-y-auto">
         {!jobs.length && (
           <div className="rounded-2xl border border-dashed border-[#ccd9d2] bg-[#f7faf7] px-4 py-5 text-center text-xs leading-5 text-[#73827c]">
             Attach a resume, transcript, certificate, paper, portfolio, or job
@@ -34,8 +49,8 @@ export function SourceListeningPanel({
           </div>
         )}
         {jobs.map((job) => {
-          const failed = job.stage === "FAILED";
-          const complete = job.stage === "COMPLETE";
+          const failed = job.status === "FAILED";
+          const complete = job.status === "COMPLETE";
           return (
             <article
               className="rounded-2xl border border-[#dde5e0] bg-[#fbfcfa] p-3"
@@ -49,7 +64,9 @@ export function SourceListeningPanel({
                   <p
                     className={`mt-0.5 text-[11px] ${failed ? "text-[#a25747]" : "text-[#70817a]"}`}
                   >
-                    {job.message}
+                    {failed && job.failure
+                      ? friendlyFailureMessage(job.failure.code)
+                      : job.message}
                   </p>
                 </div>
                 {(complete || failed) && (
@@ -63,27 +80,41 @@ export function SourceListeningPanel({
                   </button>
                 )}
               </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e4ebe7]">
-                <div
-                  className={`h-full rounded-full transition-[width] duration-500 ${failed ? "bg-[#c87e6e]" : complete ? "bg-[#4f9a76]" : "bg-[#73a88e]"}`}
-                  style={{ width: `${job.progress}%` }}
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7b8d85]">
-                <span>{listeningStageLabel(job.stage)}</span>
-                <span>
-                  {job.document_type
-                    ? job.document_type.replaceAll("_", " ")
-                    : `${job.progress}%`}
-                </span>
-              </div>
-              {failed && (
+
+              <ol className="mt-3 space-y-1.5 border-l border-[#dce5e0] pl-3">
+                {job.stages.map((stage) => (
+                  <li
+                    className={`flex items-center gap-2 text-[11px] ${
+                      stage.status === "ACTIVE"
+                        ? "font-semibold text-[#2d6a51]"
+                        : stage.status === "FAILED"
+                          ? "font-semibold text-[#a25747]"
+                          : stage.status === "COMPLETE"
+                            ? "text-[#60776d]"
+                            : "text-[#a0aaa5]"
+                    }`}
+                    key={stage.stage}
+                  >
+                    <span aria-hidden="true" className="w-3 text-center">
+                      {stageIcon(stage)}
+                    </span>
+                    <span>
+                      {stage.stage === "DETECT_DOCUMENT_TYPE" &&
+                      stage.status === "COMPLETE"
+                        ? stage.message
+                        : listeningStageLabel(stage.stage)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+
+              {failed && job.failure?.retryable && (
                 <button
-                  className="mt-2 rounded-full border border-[#d9c5be] bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#8c5144] hover:bg-[#fff8f5]"
+                  className="mt-3 rounded-full border border-[#d9c5be] bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#8c5144] hover:bg-[#fff8f5]"
                   onClick={() => void onRetry(job.id)}
                   type="button"
                 >
-                  Try again
+                  Retry from {listeningStageLabel(job.failure.stage)}
                 </button>
               )}
             </article>

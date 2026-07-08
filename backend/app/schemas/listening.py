@@ -147,16 +147,61 @@ class ListeningProposalResponse(BaseModel):
     provider: str
 
 
-class ListeningJobStage(StrEnum):
-    """Public progress states for a background listening job."""
+class PipelineStage(StrEnum):
+    """Observable Universal Listening execution stages."""
 
+    UPLOAD = "UPLOAD"
+    DETECT_DOCUMENT_TYPE = "DETECT_DOCUMENT_TYPE"
+    PARSE_DOCUMENT = "PARSE_DOCUMENT"
+    EXTRACT_TEXT = "EXTRACT_TEXT"
+    CREATE_EVIDENCE = "CREATE_EVIDENCE"
+    PERSIST_EVIDENCE = "PERSIST_EVIDENCE"
+    COMPARE_KNOWLEDGE = "COMPARE_KNOWLEDGE"
+    GENERATE_PROPOSALS = "GENERATE_PROPOSALS"
+    COMPLETE = "COMPLETE"
+
+
+class ListeningJobStatus(StrEnum):
     QUEUED = "QUEUED"
-    READING = "READING"
-    EXTRACTING_EVIDENCE = "EXTRACTING_EVIDENCE"
-    COMPARING_SOURCES = "COMPARING_SOURCES"
-    PREPARING_PROPOSALS = "PREPARING_PROPOSALS"
+    ACTIVE = "ACTIVE"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+
+
+class StageStatus(StrEnum):
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class StageTimingResponse(BaseModel):
+    stage: PipelineStage
+    status: StageStatus
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    message: str
+
+
+class ListeningFailureResponse(BaseModel):
+    code: str
+    friendly_message: str
+    stage: PipelineStage
+    retryable: bool
+    occurred_at: datetime
+    developer_message: str | None = None
+    exception_type: str | None = None
+    stack_trace: str | None = None
+
+
+class ListeningJobDiagnostics(BaseModel):
+    extracted_character_count: int
+    evidence_count: int
+    persistence_status: str
+    stage_timings: list[StageTimingResponse]
+    developer_logs: list[dict[str, Any]]
+    database_error: str | None = None
 
 
 class ListeningJobResponse(BaseModel):
@@ -165,16 +210,23 @@ class ListeningJobResponse(BaseModel):
     id: uuid.UUID
     filename: str
     media_type: str | None = None
-    stage: ListeningJobStage
-    progress: int = Field(ge=0, le=100)
+    status: ListeningJobStatus
+    current_stage: PipelineStage
     message: str
     attempt: int = Field(ge=1)
+    retry_count: int = Field(ge=0)
+    elapsed_ms: float = Field(ge=0)
     source_id: uuid.UUID | None = None
     source_type: SourceType | None = None
     document_type: str | None = None
     detection_confidence: float | None = Field(default=None, ge=0, le=1)
+    extracted_character_count: int = Field(default=0, ge=0)
     evidence_count: int = Field(default=0, ge=0)
-    error_code: str | None = None
+    persistence_status: str
+    failure: ListeningFailureResponse | None = None
+    proposals: list[KnowledgeProposal] = Field(default_factory=list)
+    stages: list[StageTimingResponse]
+    diagnostics: ListeningJobDiagnostics | None = None
     created_at: datetime
     updated_at: datetime
 

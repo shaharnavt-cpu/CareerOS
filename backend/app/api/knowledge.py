@@ -48,12 +48,18 @@ async def create_proposals(
     except ReasoningValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
+            detail={
+                "code": "PROPOSAL_FAILURE",
+                "message": "CareerOS could not validate these knowledge proposals.",
+            },
         ) from exc
     except ReasoningProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The semantic reasoning provider could not return valid output.",
+            detail={
+                "code": "REASONING_FAILURE",
+                "message": "The reasoning service is temporarily unavailable.",
+            },
         ) from exc
 
 

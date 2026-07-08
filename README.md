@@ -71,6 +71,9 @@ cp .env.example .env
 
 The default values are for local development only. They configure both Docker
 Compose and the backend to use PostgreSQL at `localhost:5432`.
+They also select deterministic local reasoning, so document uploads can complete
+without an external LLM API key. Production environments should set
+`REASONING_PROVIDER=openai-compatible`, `LLM_API_KEY`, and `LLM_MODEL`.
 
 ## Local database
 

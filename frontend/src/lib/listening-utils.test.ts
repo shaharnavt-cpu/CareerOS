@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   evidenceCategoryLabel,
+  friendlyFailureMessage,
   listeningStageLabel,
   mergeById,
   nextListeningStep,
@@ -71,10 +72,20 @@ test("composer accepts supported multiple attachments without manual classificat
 });
 
 test("queue progress uses clear user-facing stage labels", () => {
-  assert.equal(listeningStageLabel("QUEUED"), "Queued");
+  assert.equal(listeningStageLabel("UPLOAD"), "Uploaded");
   assert.equal(
-    listeningStageLabel("EXTRACTING_EVIDENCE"),
-    "Extracting evidence",
+    listeningStageLabel("PERSIST_EVIDENCE"),
+    "Saving to Career Memory",
   );
-  assert.equal(listeningStageLabel("FAILED"), "Needs attention");
+  assert.equal(listeningStageLabel("GENERATE_PROPOSALS"), "Generating proposals");
+});
+
+test("database failures explain that parsed evidence is retained", () => {
+  assert.match(friendlyFailureMessage("DATABASE_TIMEOUT"), /document is safe/i);
+  assert.match(
+    friendlyFailureMessage("DATABASE_CONSTRAINT_FAILURE"),
+    /document is safe/i,
+  );
+  assert.match(friendlyFailureMessage("PERSISTENCE_FAILURE"), /can be retried/i);
+  assert.match(friendlyFailureMessage("NO_TEXT_FOUND"), /scanned document/i);
 });

@@ -66,18 +66,28 @@ class ListeningRepository:
                 session.add(record)
                 session.flush()
 
-            existing_ids = set(
-                session.scalars(
-                    select(ListeningEvidence.id).where(
-                        ListeningEvidence.source_id == record.id
-                    )
-                )
+            existing_by_hash = dict(
+                session.execute(
+                    select(
+                        ListeningEvidence.excerpt_hash,
+                        ListeningEvidence.id,
+                    ).where(ListeningEvidence.source_id == record.id)
+                ).all()
             )
-            for item in evidence:
-                if item.id not in existing_ids:
-                    session.add(self._evidence_record(source.user_id, item))
+            new_evidence, evidence_ids = self._prepare_evidence(
+                source.user_id,
+                record.id,
+                evidence,
+                existing_by_hash,
+            )
+            session.add_all(new_evidence)
             session.flush()
-            self._persist_clusters(session, source.user_id, clusters)
+            self._persist_clusters(
+                session,
+                source.user_id,
+                clusters,
+                evidence_ids=evidence_ids,
+            )
             record.status = ListeningStatus.READY.value
             session.flush()
             count = session.scalar(
@@ -171,7 +181,10 @@ class ListeningRepository:
         session: Session,
         user_id: uuid.UUID,
         clusters: list[EvidenceCluster],
+        *,
+        evidence_ids: dict[uuid.UUID, uuid.UUID] | None = None,
     ) -> None:
+        canonical_evidence_ids = evidence_ids or {}
         for cluster in clusters:
             record = session.scalar(
                 select(ListeningEvidenceCluster).where(
@@ -202,23 +215,28 @@ class ListeningRepository:
                 record.conflicting_claims = conflicts
 
             conflicting_ids = {
-                evidence_id
+                canonical_evidence_ids.get(evidence_id, evidence_id)
                 for claim in cluster.conflicting_claims
                 for evidence_id in claim.evidence_ids
             }
             seen_excerpt: set[str] = set()
+            seen_evidence_ids: set[uuid.UUID] = set()
             for item in cluster.evidence:
+                evidence_id = canonical_evidence_ids.get(item.id, item.id)
+                if evidence_id in seen_evidence_ids:
+                    continue
+                seen_evidence_ids.add(evidence_id)
                 existing_member = session.scalar(
                     select(ListeningClusterMember.id).where(
                         ListeningClusterMember.cluster_id == record.id,
-                        ListeningClusterMember.evidence_id == item.id,
+                        ListeningClusterMember.evidence_id == evidence_id,
                     )
                 )
                 if existing_member is not None:
                     continue
                 normalized = item.normalized_excerpt or item.raw_excerpt.casefold()
                 relationship = "SUPPORTING"
-                if item.id in conflicting_ids:
+                if evidence_id in conflicting_ids:
                     relationship = "CONFLICTING"
                 elif normalized in seen_excerpt:
                     relationship = "DUPLICATE"
@@ -226,22 +244,61 @@ class ListeningRepository:
                     ListeningClusterMember(
                         user_id=user_id,
                         cluster_id=record.id,
-                        evidence_id=item.id,
+                        evidence_id=evidence_id,
                         relationship_type=relationship,
                     )
                 )
                 seen_excerpt.add(normalized)
 
+    @classmethod
+    def _prepare_evidence(
+        cls,
+        user_id: uuid.UUID,
+        source_id: uuid.UUID,
+        evidence: list[EvidenceObject],
+        existing_by_hash: dict[str, uuid.UUID],
+    ) -> tuple[list[ListeningEvidence], dict[uuid.UUID, uuid.UUID]]:
+        """Map repeated excerpts to one durable evidence row and canonical ID."""
+
+        canonical_by_hash = dict(existing_by_hash)
+        evidence_ids: dict[uuid.UUID, uuid.UUID] = {}
+        records: list[ListeningEvidence] = []
+        for item in evidence:
+            excerpt_hash = cls._evidence_hash(item)
+            evidence_id = canonical_by_hash.get(excerpt_hash)
+            if evidence_id is None:
+                evidence_id = item.id
+                canonical_by_hash[excerpt_hash] = evidence_id
+                records.append(
+                    cls._evidence_record(
+                        user_id,
+                        source_id,
+                        item,
+                        excerpt_hash=excerpt_hash,
+                    )
+                )
+            evidence_ids[item.id] = evidence_id
+        return records, evidence_ids
+
     @staticmethod
-    def _evidence_record(user_id: uuid.UUID, item: EvidenceObject) -> ListeningEvidence:
+    def _evidence_hash(item: EvidenceObject) -> str:
         excerpt_value = item.normalized_excerpt or item.raw_excerpt
-        excerpt_hash = hashlib.sha256(
+        return hashlib.sha256(
             f"{item.category.value}:{excerpt_value}".encode()
         ).hexdigest()
+
+    @staticmethod
+    def _evidence_record(
+        user_id: uuid.UUID,
+        source_id: uuid.UUID,
+        item: EvidenceObject,
+        *,
+        excerpt_hash: str,
+    ) -> ListeningEvidence:
         return ListeningEvidence(
             id=item.id,
             user_id=user_id,
-            source_id=item.source_id,
+            source_id=source_id,
             source_type=item.source_type.value,
             raw_excerpt=item.raw_excerpt,
             normalized_excerpt=item.normalized_excerpt,

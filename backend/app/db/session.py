@@ -9,12 +9,17 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+connect_args = {}
+if settings.database_url.startswith("postgresql"):
+    connect_args["connect_timeout"] = settings.database_connect_timeout_seconds
+
 engine = create_engine(
     settings.database_url,
     echo=settings.database_echo,
     pool_pre_ping=True,
     pool_size=settings.database_pool_size,
     max_overflow=settings.database_max_overflow,
+    connect_args=connect_args,
 )
 
 SessionLocal = sessionmaker(

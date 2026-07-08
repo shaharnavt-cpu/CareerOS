@@ -39,6 +39,19 @@ from app.services.proposals import ReasoningValidationError
 router = APIRouter(prefix="/listening", tags=["listening"])
 
 
+class UnavailableReasoningBridge:
+    """Defer provider configuration failures into an observable job stage."""
+
+    def __init__(self, error: ValueError) -> None:
+        self._error = error
+
+    async def generate(self, clusters, existing_memory):
+        del clusters, existing_memory
+        raise ReasoningProviderError(
+            "Reasoning provider is not configured."
+        ) from self._error
+
+
 @lru_cache
 def get_listening_engine() -> ListeningEngine:
     return ListeningEngine()
@@ -52,24 +65,86 @@ def get_listening_repository() -> ListeningRepository:
 def get_listening_queue() -> ListeningQueue:
     """Return the process-local FIFO worker used for document attachments."""
 
-    return ListeningQueue(UniversalListeningProcessor(SessionLocal))
+    try:
+        bridge = ListeningReasoningBridge(get_reasoning_pipeline())
+    except ValueError as error:
+        bridge = UnavailableReasoningBridge(error)
+    return ListeningQueue(
+        UniversalListeningProcessor(
+            SessionLocal,
+            reasoning_bridge=bridge,
+        )
+    )
 
 
-def _job_response(job: ListeningJob) -> ListeningJobResponse:
+def _job_response(
+    job: ListeningJob, *, developer: bool = False
+) -> ListeningJobResponse:
+    failure = None
+    if job.failure:
+        failure = {
+            "code": job.failure.code,
+            "friendly_message": job.failure.friendly_message,
+            "stage": job.failure.stage.value,
+            "retryable": job.failure.retryable,
+            "occurred_at": job.failure.occurred_at,
+            "developer_message": job.failure.developer_message if developer else None,
+            "exception_type": job.failure.exception_type if developer else None,
+            "stack_trace": job.failure.stack_trace if developer else None,
+        }
+    stages = [
+        {
+            "stage": timing.stage.value,
+            "status": timing.status.value,
+            "started_at": timing.started_at,
+            "completed_at": timing.completed_at,
+            "duration_ms": timing.duration_ms,
+            "message": timing.message,
+        }
+        for timing in job.stage_timings.values()
+    ]
+    diagnostics = None
+    if developer:
+        diagnostics = {
+            "extracted_character_count": job.extracted_character_count,
+            "evidence_count": job.evidence_count,
+            "persistence_status": job.persistence_status.value,
+            "stage_timings": stages,
+            "developer_logs": job.developer_logs,
+            "database_error": (
+                job.failure.developer_message
+                if job.failure
+                and job.failure.code
+                in {
+                    "DATABASE_UNAVAILABLE",
+                    "DATABASE_TIMEOUT",
+                    "DATABASE_CONSTRAINT_FAILURE",
+                    "PERSISTENCE_FAILURE",
+                }
+                else None
+            ),
+        }
     return ListeningJobResponse(
         id=job.id,
         filename=job.document.filename,
         media_type=job.document.media_type,
-        stage=job.stage.value,
-        progress=job.progress,
+        status=job.status.value,
+        current_stage=job.current_stage.value,
         message=job.message,
         attempt=job.attempt,
+        retry_count=job.retry_count,
+        elapsed_ms=job.elapsed_ms,
         source_id=job.source_id,
         source_type=job.source_type,
         document_type=job.document_type,
         detection_confidence=job.detection_confidence,
+        extracted_character_count=job.extracted_character_count,
         evidence_count=job.evidence_count,
-        error_code=job.error_code,
+        persistence_status=job.persistence_status.value,
+        failure=failure,
+        proposals=job.proposals,
+        stages=stages,
+        diagnostics=diagnostics,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -122,22 +197,24 @@ async def upload_sources(
 
 @router.get("/jobs", response_model=list[ListeningJobResponse])
 def list_listening_jobs(
+    developer: bool = Query(default=False),
     listening_queue: ListeningQueue = Depends(get_listening_queue),
 ) -> list[ListeningJobResponse]:
     """List upload queue state for source management and progress recovery."""
 
-    return [_job_response(job) for job in listening_queue.list()]
+    return [_job_response(job, developer=developer) for job in listening_queue.list()]
 
 
 @router.get("/jobs/{job_id}", response_model=ListeningJobResponse)
 def get_listening_job(
     job_id: uuid.UUID,
+    developer: bool = Query(default=False),
     listening_queue: ListeningQueue = Depends(get_listening_queue),
 ) -> ListeningJobResponse:
     """Poll one queued source without exposing its raw content."""
 
     try:
-        return _job_response(listening_queue.get(job_id))
+        return _job_response(listening_queue.get(job_id), developer=developer)
     except KeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -240,12 +317,21 @@ async def create_listening_proposals(
         response = await bridge.generate(clusters, request.existing_memory)
     except ReasoningValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "PROPOSAL_FAILURE",
+                "message": "CareerOS could not validate these knowledge proposals. "
+                "The source evidence remains available for retry.",
+            },
         ) from exc
     except ReasoningProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The semantic reasoning provider could not return valid output.",
+            detail={
+                "code": "REASONING_FAILURE",
+                "message": "The reasoning service is temporarily unavailable. "
+                "The source evidence remains available for retry.",
+            },
         ) from exc
     repository.persist_proposal_links(
         session, DEMO_USER_ID, response.proposals, clusters

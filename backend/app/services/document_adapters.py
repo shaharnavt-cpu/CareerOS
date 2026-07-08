@@ -106,6 +106,13 @@ class PdfDocumentAdapter:
                 "then attach the new copy.",
             ) from exc
 
+        if not pages:
+            raise DocumentAdapterError(
+                "NO_TEXT_FOUND",
+                "No readable text was found in this PDF. It may be a scanned image; "
+                "export a text-based PDF or add the details in the conversation.",
+            )
+
         return ExtractedDocument(
             text=_require_content("\n\n".join(pages)),
             format="PDF",

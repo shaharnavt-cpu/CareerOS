@@ -101,56 +101,193 @@ export type ListeningSource = {
   evidence_count: number;
 };
 
-export type ListeningJobStage =
-  | "QUEUED"
-  | "READING"
-  | "EXTRACTING_EVIDENCE"
-  | "COMPARING_SOURCES"
-  | "PREPARING_PROPOSALS"
-  | "COMPLETE"
-  | "FAILED";
+export type PipelineStage =
+  | "UPLOAD"
+  | "DETECT_DOCUMENT_TYPE"
+  | "PARSE_DOCUMENT"
+  | "EXTRACT_TEXT"
+  | "CREATE_EVIDENCE"
+  | "PERSIST_EVIDENCE"
+  | "COMPARE_KNOWLEDGE"
+  | "GENERATE_PROPOSALS"
+  | "COMPLETE";
+
+export type StageTiming = {
+  stage: PipelineStage;
+  status: "PENDING" | "ACTIVE" | "COMPLETE" | "FAILED";
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  message: string;
+};
+
+export type ListeningFailure = {
+  code: string;
+  friendly_message: string;
+  stage: PipelineStage;
+  retryable: boolean;
+  occurred_at: string;
+  developer_message?: string | null;
+  exception_type?: string | null;
+  stack_trace?: string | null;
+};
 
 export type ListeningJob = {
   id: string;
   filename: string;
   media_type?: string | null;
-  stage: ListeningJobStage;
-  progress: number;
+  status: "QUEUED" | "ACTIVE" | "COMPLETE" | "FAILED";
+  current_stage: PipelineStage;
   message: string;
   attempt: number;
+  retry_count: number;
+  elapsed_ms: number;
   source_id?: string | null;
   source_type?: SourceType | null;
   document_type?: string | null;
   detection_confidence?: number | null;
+  extracted_character_count: number;
   evidence_count: number;
-  error_code?: string | null;
+  persistence_status: "NOT_STARTED" | "SAVING" | "SAVED" | "FAILED";
+  failure?: ListeningFailure | null;
+  proposals: KnowledgeProposal[];
+  stages: StageTiming[];
+  diagnostics?: {
+    extracted_character_count: number;
+    evidence_count: number;
+    persistence_status: string;
+    stage_timings: StageTiming[];
+    developer_logs: Record<string, unknown>[];
+    database_error?: string | null;
+  } | null;
   created_at: string;
   updated_at: string;
 };
+
+export type HealthResponse = {
+  status: "ok" | "degraded";
+  api: "available";
+  database: {
+    status: "unknown" | "available" | "unavailable";
+    checked_at?: string | null;
+    latency_ms?: number | null;
+    error_code?: string | null;
+    message?: string | null;
+    developer_message?: string | null;
+    exception_type?: string | null;
+    stack_trace?: string | null;
+  };
+};
+
+export type ApiDiagnostic = {
+  timestamp: string;
+  method: string;
+  url: string;
+  status?: number;
+  duration_ms: number;
+  response?: unknown;
+  error?: string;
+};
+
+const apiDiagnostics: ApiDiagnostic[] = [];
+
+export class CareerOSApiError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly developerDetail?: unknown,
+  ) {
+    super(message);
+    this.name = "CareerOSApiError";
+  }
+}
+
+export function getApiDiagnostics(): ApiDiagnostic[] {
+  return [...apiDiagnostics];
+}
+
+function recordApiDiagnostic(diagnostic: ApiDiagnostic) {
+  apiDiagnostics.unshift(diagnostic);
+  apiDiagnostics.splice(50);
+}
+
+async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  const started = performance.now();
+  const method = init?.method ?? "GET";
+  try {
+    const response = await fetch(url, init);
+    const responseBody = await response
+      .clone()
+      .json()
+      .catch(() => null);
+    recordApiDiagnostic({
+      timestamp: new Date().toISOString(),
+      method,
+      url,
+      status: response.status,
+      duration_ms: Math.round((performance.now() - started) * 100) / 100,
+      response: responseBody,
+    });
+    return response;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    recordApiDiagnostic({
+      timestamp: new Date().toISOString(),
+      method,
+      url,
+      duration_ms: Math.round((performance.now() - started) * 100) / 100,
+      error: detail,
+    });
+    throw new CareerOSApiError(
+      "API_UNAVAILABLE",
+      "CareerOS cannot reach the listening service. Check that the backend is running, then retry.",
+      detail,
+    );
+  }
+}
 
 export async function uploadListeningFiles(
   files: File[],
 ): Promise<{ jobs: ListeningJob[] }> {
   const body = new FormData();
   files.forEach((file) => body.append("files", file, file.name));
-  const response = await fetch(`${apiBase}/api/listening/uploads`, {
+  const response = await apiFetch(`${apiBase}/api/listening/uploads`, {
     method: "POST",
     body,
   });
   return parseResponse(response);
 }
 
-export async function listListeningJobs(): Promise<ListeningJob[]> {
-  const response = await fetch(`${apiBase}/api/listening/jobs`, {
+export async function listListeningJobs(
+  developer = false,
+): Promise<ListeningJob[]> {
+  const response = await apiFetch(
+    `${apiBase}/api/listening/jobs${developer ? "?developer=true" : ""}`,
+    {
     cache: "no-store",
-  });
+    },
+  );
   return parseResponse(response);
 }
 
 export async function retryListeningJob(jobId: string): Promise<ListeningJob> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${apiBase}/api/listening/jobs/${jobId}/retry`,
     { method: "POST" },
+  );
+  return parseResponse(response);
+}
+
+export async function getHealth(
+  developer = false,
+  refresh = false,
+): Promise<HealthResponse> {
+  const query = new URLSearchParams();
+  if (developer) query.set("developer", "true");
+  if (refresh) query.set("refresh", "true");
+  const response = await apiFetch(
+    `${apiBase}/api/health${query.size ? `?${query}` : ""}`,
+    { cache: "no-store" },
   );
   return parseResponse(response);
 }
@@ -158,7 +295,7 @@ export async function retryListeningJob(jobId: string): Promise<ListeningJob> {
 export async function submitListeningSource(
   input: PendingSource,
 ): Promise<{ source: ListeningSource }> {
-  const response = await fetch(`${apiBase}/api/listening/sources`, {
+  const response = await apiFetch(`${apiBase}/api/listening/sources`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -174,7 +311,7 @@ export async function generateListeningProposals(
   evidence_considered: number;
   provider: string;
 }> {
-  const response = await fetch(`${apiBase}/api/listening/proposals`, {
+  const response = await apiFetch(`${apiBase}/api/listening/proposals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source_ids: sourceIds }),
@@ -187,7 +324,7 @@ export async function generateKnowledgeProposals(input: {
   source_type: SourceType;
   source_name: string;
 }): Promise<ReasoningResponse> {
-  const response = await fetch(`${apiBase}/api/knowledge/proposals`, {
+  const response = await apiFetch(`${apiBase}/api/knowledge/proposals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -199,7 +336,7 @@ export async function reviewKnowledgeProposal(
   proposal: KnowledgeProposal,
   decision: "APPROVE" | "REJECT",
 ): Promise<{ proposal: KnowledgeProposal; canonical_entity_id?: string | null }> {
-  const response = await fetch(`${apiBase}/api/knowledge/proposals/review`, {
+  const response = await apiFetch(`${apiBase}/api/knowledge/proposals/review`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ proposal, decision }),
@@ -210,9 +347,20 @@ export async function reviewKnowledgeProposal(
 async function parseResponse<T>(response: Response): Promise<T> {
   if (response.ok) return (await response.json()) as T;
   const body = (await response.json().catch(() => null)) as {
-    detail?: string;
+    detail?: string | { code?: string; message?: string };
+    error?: { code?: string; message?: string };
   } | null;
-  throw new Error(body?.detail ?? `CareerOS API returned ${response.status}.`);
+  const structured = body?.error ??
+    (typeof body?.detail === "object" ? body.detail : undefined);
+  const message =
+    structured?.message ??
+    (typeof body?.detail === "string" ? body.detail : undefined) ??
+    `CareerOS API returned ${response.status}.`;
+  throw new CareerOSApiError(
+    structured?.code ?? `HTTP_${response.status}`,
+    message,
+    body,
+  );
 }
 
 export function mergeProposals(
