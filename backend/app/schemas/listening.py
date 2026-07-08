@@ -145,6 +145,7 @@ class ListeningProposalResponse(BaseModel):
     clusters_considered: int
     evidence_considered: int
     provider: str
+    hidden_supporting_evidence_count: int = 0
 
 
 class PipelineStage(StrEnum):
@@ -222,6 +223,7 @@ class ListeningJobResponse(BaseModel):
     detection_confidence: float | None = Field(default=None, ge=0, le=1)
     extracted_character_count: int = Field(default=0, ge=0)
     evidence_count: int = Field(default=0, ge=0)
+    hidden_supporting_evidence_count: int = Field(default=0, ge=0)
     persistence_status: str
     failure: ListeningFailureResponse | None = None
     proposals: list[KnowledgeProposal] = Field(default_factory=list)

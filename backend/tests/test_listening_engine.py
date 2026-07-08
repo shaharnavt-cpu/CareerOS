@@ -229,7 +229,7 @@ async def test_fused_evidence_reaches_sprint_four_with_full_provenance() -> None
 
     response = await bridge.generate(cluster, [])
 
-    assert response.provider == "local-semantic-v1"
+    assert response.provider == "knowledge-review-intelligence:local-semantic-v1"
     assert len(response.proposals) == 1
     proposal = response.proposals[0]
     assert len(proposal.evidence) == 2

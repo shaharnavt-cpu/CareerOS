@@ -8,6 +8,8 @@ import {
   mergeById,
   nextListeningStep,
   replacePendingById,
+  resolveProposalClarification,
+  reviewSummaryFromJobs,
   validateListeningAttachments,
 } from "./listening-utils.ts";
 
@@ -88,4 +90,55 @@ test("database failures explain that parsed evidence is retained", () => {
   );
   assert.match(friendlyFailureMessage("PERSISTENCE_FAILURE"), /can be retried/i);
   assert.match(friendlyFailureMessage("NO_TEXT_FOUND"), /scanned document/i);
+});
+
+test("review counts proposals separately from quietly saved evidence", () => {
+  const summary = reviewSummaryFromJobs([
+    {
+      source_id: "resume",
+      evidence_count: 80,
+      hidden_supporting_evidence_count: 60,
+      proposals: [{ id: "education" }, { id: "skills" }],
+    },
+    {
+      source_id: "transcript",
+      evidence_count: 70,
+      hidden_supporting_evidence_count: 120,
+      proposals: [{ id: "education" }, { id: "achievement" }],
+    },
+  ]);
+
+  assert.deepEqual(summary, {
+    proposal_count: 3,
+    evidence_count: 150,
+    hidden_supporting_evidence_count: 120,
+  });
+});
+
+test("clarification answer updates its pending proposal exactly once", () => {
+  const pending = {
+    entity_type: "EXPERIENCE",
+    proposed_value: {
+      organization_name: "Needs clarification",
+    } as Record<string, unknown>,
+    clarification: { question: "Which organization?" },
+    review_status: "NEEDS_CLARIFICATION",
+  };
+
+  const result = resolveProposalClarification(
+    pending,
+    "The organization is the University of Texas at Austin, specifically under the Department of Astronomy.",
+  );
+
+  assert.equal(
+    result.proposal.proposed_value.organization_name,
+    "University of Texas at Austin",
+  );
+  assert.equal(
+    result.proposal.proposed_value.department,
+    "Department of Astronomy",
+  );
+  assert.equal(result.proposal.clarification, undefined);
+  assert.equal(result.proposal.review_status, "NEEDS_REVIEW");
+  assert.match(result.acknowledgement, /Got it/);
 });

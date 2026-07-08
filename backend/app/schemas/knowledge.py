@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -54,6 +55,34 @@ class ApprovalState(StrEnum):
     CANONICAL = "CANONICAL"
 
 
+class ReviewProposalType(StrEnum):
+    """User-facing memory shapes synthesized from one or more evidence clusters."""
+
+    EDUCATION = "EDUCATION"
+    PROGRAM = "PROGRAM"
+    EXPERIENCE = "EXPERIENCE"
+    PROJECT = "PROJECT"
+    SKILL_SET = "SKILL_SET"
+    ORGANIZATION = "ORGANIZATION"
+    ACHIEVEMENT = "ACHIEVEMENT"
+    CONTACT = "CONTACT"
+    NEEDS_CLASSIFICATION = "NEEDS_CLASSIFICATION"
+
+
+class ReviewStatus(StrEnum):
+    """Review priority independent from canonical approval state."""
+
+    HIGH_CONFIDENCE = "HIGH_CONFIDENCE"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
+    HIDDEN_SUPPORTING_EVIDENCE = "HIDDEN_SUPPORTING_EVIDENCE"
+
+
+class ClarificationStatus(StrEnum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+
+
 class ReviewDecision(StrEnum):
     """Explicit decisions a user may submit."""
 
@@ -90,6 +119,9 @@ class Clarification(BaseModel):
     question: str = Field(min_length=10, max_length=1000)
     reason: ClarificationReason
     detail: str = Field(min_length=3, max_length=1000)
+    status: ClarificationStatus = ClarificationStatus.OPEN
+    answer: str | None = Field(default=None, max_length=2000)
+    resolved_at: datetime | None = None
 
 
 class ProposalRelationship(BaseModel):
@@ -104,6 +136,7 @@ class KnowledgeProposal(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     entity_type: EntityType
+    proposal_type: ReviewProposalType = ReviewProposalType.NEEDS_CLASSIFICATION
     proposed_value: dict[str, Any]
     operation: ProposalOperation = ProposalOperation.CREATE
     confidence: float = Field(ge=0, le=1)
@@ -113,6 +146,11 @@ class KnowledgeProposal(BaseModel):
     approval_state: ApprovalState = ApprovalState.NEEDS_REVIEW
     duplicate_of: uuid.UUID | None = None
     relationships: list[ProposalRelationship] = Field(default_factory=list)
+    review_status: ReviewStatus = ReviewStatus.NEEDS_REVIEW
+    supporting_evidence_count: int = Field(default=0, ge=0)
+    source_names: list[str] = Field(default_factory=list)
+    editable: bool = True
+    clarification_resolved_at: datetime | None = None
 
     @model_validator(mode="after")
     def clarification_matches_confidence(self) -> KnowledgeProposal:
@@ -122,6 +160,25 @@ class KnowledgeProposal(BaseModel):
             and self.confidence >= 0.7
         ):
             raise ValueError("low-confidence clarification requires confidence < 0.7")
+        if self.proposal_type is ReviewProposalType.NEEDS_CLASSIFICATION:
+            self.proposal_type = {
+                EntityType.EDUCATION: ReviewProposalType.EDUCATION,
+                EntityType.PROGRAM: ReviewProposalType.PROGRAM,
+                EntityType.EXPERIENCE: ReviewProposalType.EXPERIENCE,
+                EntityType.PROJECT: ReviewProposalType.PROJECT,
+                EntityType.ACHIEVEMENT: ReviewProposalType.ACHIEVEMENT,
+                EntityType.SKILL: ReviewProposalType.SKILL_SET,
+            }.get(self.entity_type, ReviewProposalType.NEEDS_CLASSIFICATION)
+        if self.supporting_evidence_count == 0:
+            self.supporting_evidence_count = len(self.evidence)
+        if not self.source_names:
+            self.source_names = list(
+                dict.fromkeys(item.title for item in self.evidence)
+            )
+        if self.clarification and self.clarification.status is ClarificationStatus.OPEN:
+            self.review_status = ReviewStatus.NEEDS_CLARIFICATION
+        elif self.confidence >= 0.9:
+            self.review_status = ReviewStatus.HIGH_CONFIDENCE
         return self
 
 

@@ -128,6 +128,7 @@ class ProcessingResult:
     document_type: str
     detection_confidence: float
     evidence_count: int
+    hidden_supporting_evidence_count: int = 0
     proposals: list[KnowledgeProposal] = field(default_factory=list)
 
 
@@ -153,6 +154,7 @@ class ListeningJob:
     detection_confidence: float | None = None
     extracted_character_count: int = 0
     evidence_count: int = 0
+    hidden_supporting_evidence_count: int = 0
     persistence_status: PersistenceStatus = PersistenceStatus.NOT_STARTED
     proposals: list[KnowledgeProposal] = field(default_factory=list)
     failure: JobFailure | None = None
@@ -398,6 +400,9 @@ class ListeningQueue:
             job.document_type = result.document_type
             job.detection_confidence = result.detection_confidence
             job.evidence_count = result.evidence_count
+            job.hidden_supporting_evidence_count = (
+                result.hidden_supporting_evidence_count
+            )
             job.proposals = result.proposals
         self._transition(job_id, PipelineStage.COMPLETE, "Listening complete")
         with self._lock:
@@ -656,6 +661,9 @@ class UniversalListeningProcessor:
                 )
                 proposals = proposal_response.proposals
                 job.proposals = proposals
+                job.hidden_supporting_evidence_count = (
+                    proposal_response.hidden_supporting_evidence_count
+                )
         if proposals and not artifacts.proposal_links_persisted:
             with self._session_factory() as session:
                 self._repository.persist_proposal_links(
@@ -674,5 +682,6 @@ class UniversalListeningProcessor:
             document_type=detection.document_type.value,
             detection_confidence=detection.confidence,
             evidence_count=job.evidence_count,
+            hidden_supporting_evidence_count=job.hidden_supporting_evidence_count,
             proposals=proposals,
         )

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.schemas.knowledge import EvidenceReference, ReasoningRequest
 from app.schemas.listening import (
-    EvidenceCategory,
     EvidenceCluster,
     EvidenceObject,
     ListeningProposalResponse,
@@ -14,6 +12,7 @@ from app.schemas.listening import (
     SourceSubmission,
 )
 from app.services.evidence_fusion import EvidenceFusionService
+from app.services.knowledge_review_intelligence import KnowledgeReviewIntelligence
 from app.services.listeners import ListenerRegistry
 from app.services.pipeline import KnowledgeReasoningPipeline
 from app.services.source_adapters import SourceAdapterRegistry
@@ -45,80 +44,28 @@ class ListeningEngine:
 
 
 class ListeningReasoningBridge:
-    """Feed fused evidence into, but never around, the Sprint 4 pipeline."""
+    """Synthesize fused evidence into concise, reviewable career memories."""
 
-    _headings = {
-        EvidenceCategory.EDUCATION: "Education",
-        EvidenceCategory.PROGRAM: "Programs",
-        EvidenceCategory.EXPERIENCE: "Experience",
-        EvidenceCategory.PROJECT: "Projects",
-        EvidenceCategory.SKILL: "Skills",
-        EvidenceCategory.ACHIEVEMENT: "Achievements",
-    }
-
-    def __init__(self, pipeline: KnowledgeReasoningPipeline) -> None:
+    def __init__(
+        self,
+        pipeline: KnowledgeReasoningPipeline,
+        review_intelligence: KnowledgeReviewIntelligence | None = None,
+    ) -> None:
         self._pipeline = pipeline
+        self._review_intelligence = review_intelligence or KnowledgeReviewIntelligence()
 
     async def generate(
         self,
         clusters: list[EvidenceCluster],
         existing_memory: list,
     ) -> ListeningProposalResponse:
-        proposals = []
-        provider = self._pipeline.provider_name
-        eligible = [
-            cluster for cluster in clusters if cluster.category in self._headings
-        ]
-
-        for cluster in eligible:
-            heading = self._headings[cluster.category]
-            raw_source = "\n".join(
-                [heading, *(item.raw_excerpt for item in cluster.evidence)]
-            )
-            conflicts = [
-                f"{claim.reason} {' versus '.join(claim.excerpts)}"
-                for claim in cluster.conflicting_claims
-            ]
-            result = await self._pipeline.run(
-                ReasoningRequest(
-                    raw_source=raw_source,
-                    source_type=cluster.evidence[0].source_type,
-                    source_name=f"Evidence cluster: {cluster.label}",
-                    existing_memory=existing_memory,
-                    source_conflicts=conflicts,
-                )
-            )
-            references = [
-                EvidenceReference(
-                    evidence_id=item.id,
-                    source_id=str(item.source_id),
-                    source_type=item.source_type,
-                    title=str(item.provenance.get("label", "Career source")),
-                    excerpt=item.raw_excerpt,
-                    location=self._location(item),
-                    category=item.category.value,
-                    confidence=item.confidence,
-                    corroborated=cluster.corroborated,
-                )
-                for item in cluster.evidence
-            ]
-            proposals.extend(
-                proposal.model_copy(update={"evidence": references})
-                for proposal in result.proposals
-            )
+        del existing_memory
+        result = self._review_intelligence.synthesize(clusters)
 
         return ListeningProposalResponse(
-            proposals=proposals,
-            clusters_considered=len(eligible),
-            evidence_considered=sum(len(cluster.evidence) for cluster in eligible),
-            provider=provider,
+            proposals=result.proposals,
+            clusters_considered=len(clusters),
+            evidence_considered=result.evidence_considered,
+            provider=f"knowledge-review-intelligence:{self._pipeline.provider_name}",
+            hidden_supporting_evidence_count=(result.hidden_supporting_evidence_count),
         )
-
-    @staticmethod
-    def _location(item: EvidenceObject) -> str:
-        parts = []
-        if item.location.get("section"):
-            parts.append(str(item.location["section"]))
-        if item.location.get("line"):
-            parts.append(f"line {item.location['line']}")
-        return ", ".join(parts) or "source"

@@ -9,6 +9,8 @@ import { SourceListeningPanel } from "@/components/onboarding/source-listening-p
 import {
   friendlyFailureMessage,
   mergeById,
+  resolveProposalClarification,
+  reviewSummaryFromJobs,
   validateListeningAttachments,
 } from "@/lib/listening-utils";
 import {
@@ -16,12 +18,14 @@ import {
   generateListeningProposals,
   listListeningJobs,
   loadProposals,
+  loadReviewSummary,
   type KnowledgeProposal,
   type ListeningJob,
   rememberListeningSource,
   replacePendingProposals,
   retryListeningJob,
   saveProposals,
+  saveReviewSummary,
   submitListeningSource,
   uploadListeningFiles,
 } from "@/lib/knowledge-api";
@@ -36,6 +40,7 @@ function errorMessage(reason: unknown, fallback: string) {
 export function OnboardingWorkspace() {
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
   const [jobs, setJobs] = useState<ListeningJob[]>([]);
+  const [reviewSummary, setReviewSummary] = useState(loadReviewSummary());
   const [conversationError, setConversationError] = useState<string | null>(
     null,
   );
@@ -43,6 +48,7 @@ export function OnboardingWorkspace() {
   const initialized = useRef(false);
   const processedJobs = useRef(new Set<string>());
   const hiddenJobs = useRef(new Set<string>());
+  const pendingClarificationId = useRef<string | null>(null);
 
   const addProposals = useCallback((incoming: KnowledgeProposal[]) => {
     setProposals((current) => {
@@ -74,6 +80,9 @@ export function OnboardingWorkspace() {
   const synchronizeJobs = useCallback(
     (incoming: ListeningJob[]) => {
       setJobs(incoming.filter((job) => !hiddenJobs.current.has(job.id)));
+      const summary = reviewSummaryFromJobs(incoming);
+      setReviewSummary(summary);
+      saveReviewSummary(summary);
       processCompletedJobs(incoming);
     },
     [processCompletedJobs],
@@ -138,6 +147,21 @@ export function OnboardingWorkspace() {
 
   async function reasonAboutConversation(message: string) {
     setConversationError(null);
+    const pending = proposals.find(
+      (proposal) => proposal.id === pendingClarificationId.current,
+    );
+    if (pending?.clarification) {
+      const resolution = resolveProposalClarification(pending, message);
+      setProposals((current) => {
+        const next = current.map((proposal) =>
+          proposal.id === pending.id ? resolution.proposal : proposal,
+        );
+        saveProposals(next);
+        return next;
+      });
+      pendingClarificationId.current = null;
+      return resolution.acknowledgement;
+    }
     try {
       const ingestion = await submitListeningSource({
         raw_text: message,
@@ -149,8 +173,11 @@ export function OnboardingWorkspace() {
       addProposals(result.proposals);
       const clarification = result.proposals.find(
         (proposal) => proposal.clarification,
-      )?.clarification;
-      if (clarification) return clarification.question;
+      );
+      if (clarification?.clarification) {
+        pendingClarificationId.current = clarification.id;
+        return clarification.clarification.question;
+      }
       return result.proposals.length
         ? `I found ${result.proposals.length} explainable proposal${result.proposals.length === 1 ? "" : "s"}. You can review the source evidence beside our conversation.`
         : "I didn’t find a complete career entity in that message. Try naming the experience, project, skill, or achievement you want to capture.";
@@ -188,7 +215,7 @@ export function OnboardingWorkspace() {
           className="inline-flex min-h-10 items-center justify-center gap-2 self-start rounded-full border border-[#cbdad2] bg-white px-4 text-xs font-semibold text-[#2f5d4d] shadow-sm transition hover:border-[#80ad99] hover:bg-[#f4faf6] sm:self-auto"
           href="/review"
         >
-          Review {proposals.length} items
+          Review {proposals.length} career memories
           <span aria-hidden="true">→</span>
         </Link>
       </div>
@@ -204,6 +231,8 @@ export function OnboardingWorkspace() {
             onRetry={retrySource}
           />
           <KnowledgePanel
+            evidenceCount={reviewSummary.evidence_count}
+            hiddenEvidenceCount={reviewSummary.hidden_supporting_evidence_count}
             items={proposals}
             stage={Math.min(3, Math.max(1, Math.ceil(proposals.length / 2)))}
           />
