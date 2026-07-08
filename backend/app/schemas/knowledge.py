@@ -90,6 +90,14 @@ class ReviewDecision(StrEnum):
     REJECT = "REJECT"
 
 
+class DurableReviewStatus(StrEnum):
+    PENDING_REVIEW = "PENDING_REVIEW"
+    APPROVED = "APPROVED"
+    EDITED_APPROVED = "EDITED_APPROVED"
+    REJECTED = "REJECTED"
+    NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
+
+
 class ClarificationReason(StrEnum):
     """The only reasons that may justify a clarification question."""
 
@@ -229,6 +237,33 @@ class ProposalReviewResponse(BaseModel):
 
     proposal: KnowledgeProposal
     canonical_entity_id: uuid.UUID | None = None
+
+
+class ProposalEditRequest(BaseModel):
+    proposal: KnowledgeProposal
+
+
+class CanonicalReviewMemory(BaseModel):
+    id: uuid.UUID
+    memory_type: ReviewProposalType
+    title: str
+    structured_fields: dict[str, Any]
+    evidence_ids: list[str]
+    source_ids: list[str]
+    confidence: float
+    review_proposal_id: str
+    updated_at: datetime
+
+
+class DashboardSummaryResponse(BaseModel):
+    counts: dict[str, int]
+    canonical_total: int
+    pending_review_count: int
+    reviewed_count: int
+    proposal_total: int
+    supporting_evidence_count: int
+    profile_completeness: int = Field(ge=0, le=100)
+    recent_memories: list[CanonicalReviewMemory]
 
 
 class CanonicalMemoryItem(BaseModel):

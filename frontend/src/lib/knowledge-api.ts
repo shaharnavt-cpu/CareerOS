@@ -117,6 +117,29 @@ export type ReviewSummary = {
   hidden_supporting_evidence_count: number;
 };
 
+export type CanonicalReviewMemory = {
+  id: string;
+  memory_type: ReviewProposalType;
+  title: string;
+  structured_fields: Record<string, unknown>;
+  evidence_ids: string[];
+  source_ids: string[];
+  confidence: number;
+  review_proposal_id: string;
+  updated_at: string;
+};
+
+export type DashboardSummary = {
+  counts: Record<string, number>;
+  canonical_total: number;
+  pending_review_count: number;
+  reviewed_count: number;
+  proposal_total: number;
+  supporting_evidence_count: number;
+  profile_completeness: number;
+  recent_memories: CanonicalReviewMemory[];
+};
+
 export type PendingSource = {
   raw_text: string;
   source_type: SourceType;
@@ -375,6 +398,34 @@ export async function reviewKnowledgeProposal(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ proposal, decision }),
+  });
+  return parseResponse(response);
+}
+
+export async function listReviewProposals(): Promise<KnowledgeProposal[]> {
+  const response = await apiFetch(`${apiBase}/api/knowledge/review-proposals`, {
+    cache: "no-store",
+  });
+  return parseResponse(response);
+}
+
+export async function editReviewProposal(
+  proposal: KnowledgeProposal,
+): Promise<KnowledgeProposal> {
+  const response = await apiFetch(
+    `${apiBase}/api/knowledge/review-proposals/${proposal.id}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proposal }),
+    },
+  );
+  return parseResponse(response);
+}
+
+export async function getDashboardSummary(): Promise<DashboardSummary> {
+  const response = await apiFetch(`${apiBase}/api/knowledge/dashboard`, {
+    cache: "no-store",
   });
   return parseResponse(response);
 }

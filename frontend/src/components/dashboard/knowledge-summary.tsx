@@ -1,13 +1,7 @@
-"use client";
-
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { categoryOrder } from "@/lib/onboarding-data";
-import {
-  loadProposals,
-  type KnowledgeProposal,
-  proposalCategory,
-} from "@/lib/knowledge-api";
+import type { DashboardSummary } from "@/lib/knowledge-api";
 
 const strengthStyles = {
   Strong: "bg-[#e5f4eb] text-[#2c694f]",
@@ -15,33 +9,38 @@ const strengthStyles = {
   Review: "bg-[#fff3da] text-[#8a5b16]",
 };
 
-export function KnowledgeSummary() {
-  const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setProposals(loadProposals()), 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+const categoryToMemoryType = {
+  Education: ["EDUCATION"],
+  Programs: ["PROGRAM", "ORGANIZATION"],
+  Experience: ["EXPERIENCE"],
+  Projects: ["PROJECT"],
+  Achievements: ["ACHIEVEMENT"],
+  Skills: ["SKILL_SET", "CONTACT"],
+} satisfies Record<(typeof categoryOrder)[number], string[]>;
 
-  const summary = useMemo(
+export function KnowledgeSummary({
+  summary,
+}: {
+  summary: DashboardSummary | null;
+}) {
+  const rows = useMemo(
     () =>
       categoryOrder.map((label) => {
-        const items = proposals.filter(
-          (proposal) => proposalCategory(proposal) === label,
+        const canonical = categoryToMemoryType[label].reduce(
+          (count, type) => count + (summary?.counts[type] ?? 0),
+          0,
         );
-        const canonical = items.filter(
-          (proposal) => proposal.approval_state === "CANONICAL",
-        ).length;
         const strength =
-          items.length > 0 && canonical === items.length
+          canonical >= 2
             ? "Strong"
             : canonical > 0
               ? "Good"
               : "Review";
         return { label, count: canonical, strength } as const;
       }),
-    [proposals],
+    [summary],
   );
-  const total = summary.reduce((count, item) => count + item.count, 0);
+  const total = summary?.canonical_total ?? 0;
 
   return (
     <section className="rounded-[26px] border border-[#dce4df] bg-white p-5 shadow-[0_20px_50px_-42px_rgba(20,58,46,0.7)] sm:p-6">
@@ -59,7 +58,7 @@ export function KnowledgeSummary() {
         </span>
       </div>
       <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        {summary.map((item) => (
+        {rows.map((item) => (
           <div
             className="flex items-center justify-between rounded-2xl border border-[#e4e9e5] bg-[#fafbf9] px-4 py-3"
             key={item.label}

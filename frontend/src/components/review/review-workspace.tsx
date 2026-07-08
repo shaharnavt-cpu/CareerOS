@@ -8,6 +8,8 @@ import { categoryOrder } from "@/lib/onboarding-data";
 import { evidenceCategoryLabel } from "@/lib/listening-utils";
 import {
   clarificationReasonLabel,
+  editReviewProposal,
+  listReviewProposals,
   loadProposals,
   loadReviewSummary,
   type KnowledgeProposal,
@@ -32,14 +34,20 @@ export function ReviewWorkspace() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setItems(loadProposals());
       setSummary(loadReviewSummary());
+      listReviewProposals()
+        .then((proposals) => {
+          setItems(proposals);
+          saveProposals(proposals);
+        })
+        .catch(() => setItems(loadProposals()));
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
-  const approvedCount = useMemo(
-    () => items.filter((item) => item.approval_state === "CANONICAL").length,
+  const reviewedCount = useMemo(
+    () =>
+      items.filter((item) => item.approval_state !== "NEEDS_REVIEW").length,
     [items],
   );
 
@@ -82,11 +90,11 @@ export function ReviewWorkspace() {
     setDraftTitle(proposalTitle(item));
   }
 
-  function saveEdit(item: KnowledgeProposal) {
+  async function saveEdit(item: KnowledgeProposal) {
     const value = draftTitle.trim();
     if (!value) return;
     const primaryField = proposalPrimaryField(item);
-    updateItem({
+    const edited = {
       ...item,
       proposed_value: {
         ...item.proposed_value,
@@ -97,9 +105,18 @@ export function ReviewWorkspace() {
       },
       clarification: null,
       approval_state: "NEEDS_REVIEW",
-    });
-    setEditingId(null);
-    setNotice("Edit validated locally. Approve it to update Career Memory.");
+    } satisfies KnowledgeProposal;
+    setPendingId(item.id);
+    try {
+      const saved = await editReviewProposal(edited);
+      updateItem(saved);
+      setEditingId(null);
+      setNotice("Edit saved. Approve it to update Career Memory.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Edit could not be saved.");
+    } finally {
+      setPendingId(null);
+    }
   }
 
   return (
@@ -120,10 +137,10 @@ export function ReviewWorkspace() {
         </div>
         <div className="rounded-2xl border border-[#d6e3db] bg-white px-5 py-4 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#84928d]">
-            Canonical approvals
+            Review progress
           </p>
           <p className="mt-1 text-2xl font-semibold text-[#265a48]">
-            {approvedCount}
+            {reviewedCount}
             <span className="text-sm font-medium text-[#8a9993]">
               /{items.length}
             </span>
@@ -197,7 +214,7 @@ export function ReviewWorkspace() {
                               />
                               <button
                                 className="rounded-xl bg-[#245f4d] px-3 text-xs font-semibold text-white"
-                                onClick={() => saveEdit(item)}
+                                onClick={() => void saveEdit(item)}
                                 type="button"
                               >
                                 Save

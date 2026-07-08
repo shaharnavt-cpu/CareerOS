@@ -29,6 +29,8 @@ EXPECTED_TABLES = {
     "listening_evidence_clusters",
     "listening_cluster_members",
     "listening_proposal_evidence_links",
+    "review_proposals",
+    "canonical_memory_records",
     "stories",
     "story_chapters",
     "story_memberships",
