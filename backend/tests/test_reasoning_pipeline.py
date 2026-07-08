@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 
+from app.core.config import Settings
 from app.schemas.knowledge import (
     ClarificationReason,
     EntityType,
@@ -16,7 +17,7 @@ from app.schemas.knowledge import (
 )
 from app.services.confidence import ConfidenceAggregator
 from app.services.extraction import EntityExtractor
-from app.services.llm import LocalSemanticReasoningProvider
+from app.services.llm import LocalSemanticReasoningProvider, build_reasoning_provider
 from app.services.normalization import SourceNormalizer
 from app.services.pipeline import KnowledgeReasoningPipeline
 from app.services.proposals import ProposalBuilder, ReasoningValidationError
@@ -215,3 +216,15 @@ def test_clarifications_have_only_allowed_deterministic_reasons(
         confidence.clarification_reason(score, assessment, has_evidence=has_evidence)
         is expected
     )
+
+
+def test_local_deterministic_provider_does_not_require_api_key() -> None:
+    provider = build_reasoning_provider(
+        Settings(
+            reasoning_provider="local-deterministic",
+            llm_api_key=None,
+        )
+    )
+
+    assert isinstance(provider, LocalSemanticReasoningProvider)
+    assert provider.name == "local-semantic-v1"

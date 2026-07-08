@@ -13,9 +13,9 @@ from docx import Document
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
-from app.api.listening import get_listening_queue
+from app.api.listening import _job_response, get_listening_queue
 from app.main import app
 from app.services.document_adapters import (
     DocumentAdapterError,
@@ -257,8 +257,8 @@ def test_database_timeout_retains_parsing_and_resumes_at_persistence() -> None:
                 evidence_count=len(evidence),
             )
 
-        def list_evidence(self, session):
-            del session
+        def list_evidence(self, session, user_id):
+            del session, user_id
             return self.evidence
 
         def persist_clusters(self, session, user_id, clusters):
@@ -299,6 +299,42 @@ def test_database_timeout_retains_parsing_and_resumes_at_persistence() -> None:
     assert (
         sum(log["event"] == "PARSE_DOCUMENT" for log in recovered.developer_logs) == 1
     )
+    listening_queue.shutdown()
+
+
+def test_integrity_error_at_persistence_is_not_mislabeled_as_reasoning() -> None:
+    def processor(job, report):
+        del job
+        report(PipelineStage.PERSIST_EVIDENCE, "Saving evidence")
+        raise IntegrityError(
+            "INSERT INTO listening_evidence",
+            {},
+            ValueError("duplicate evidence constraint"),
+        )
+
+    listening_queue = ListeningQueue(processor)
+    job = listening_queue.enqueue(RawDocument("resume.pdf", b"pdf"))
+    assert listening_queue.join()
+
+    failed = listening_queue.get(job.id)
+    assert failed.status is JobStatus.FAILED
+    assert failed.current_stage is PipelineStage.PERSIST_EVIDENCE
+    assert failed.persistence_status is PersistenceStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.code == "DATABASE_CONSTRAINT_FAILURE"
+
+    public = _job_response(failed)
+    assert public.diagnostics is None
+    assert public.failure is not None
+    assert public.failure.developer_message is None
+    assert public.failure.stack_trace is None
+
+    developer = _job_response(failed, developer=True)
+    assert developer.diagnostics is not None
+    assert developer.diagnostics.database_error is not None
+    assert "duplicate evidence constraint" in developer.diagnostics.database_error
+    assert developer.failure is not None
+    assert developer.failure.stack_trace
     listening_queue.shutdown()
 
 

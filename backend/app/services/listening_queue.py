@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas.knowledge import DEMO_USER_ID, KnowledgeProposal
@@ -315,6 +315,27 @@ class ListeningQueue:
                 retryable=True,
             )
             return
+        except IntegrityError as error:
+            self._fail_from_exception(
+                job_id,
+                "DATABASE_CONSTRAINT_FAILURE",
+                "CareerOS could not save this evidence because stored data conflicted "
+                "with a database constraint. The parsed document remains available "
+                "for retry.",
+                error,
+                retryable=True,
+            )
+            return
+        except SQLAlchemyError as error:
+            self._fail_from_exception(
+                job_id,
+                "PERSISTENCE_FAILURE",
+                "CareerOS could not save this evidence. The parsed document remains "
+                "available for retry.",
+                error,
+                retryable=True,
+            )
+            return
         except DocumentAdapterError as error:
             code = error.code
             if code not in {"EMPTY_DOCUMENT", "NO_TEXT_FOUND", "UNSUPPORTED_FILE"}:
@@ -355,6 +376,8 @@ class ListeningQueue:
                     PipelineStage.EXTRACT_TEXT,
                     PipelineStage.CREATE_EVIDENCE,
                 }
+                else "PERSISTENCE_FAILURE"
+                if stage is PipelineStage.PERSIST_EVIDENCE
                 else "PROPOSAL_FAILURE"
                 if stage is PipelineStage.GENERATE_PROPOSALS
                 else "REASONING_FAILURE"
@@ -535,6 +558,7 @@ class UniversalListeningProcessor:
         repository: ListeningRepository | None = None,
         reasoning_bridge: ListeningReasoningBridge | None = None,
         database_health: DatabaseHealthMonitor | None = None,
+        user_id: uuid.UUID = DEMO_USER_ID,
     ) -> None:
         self._session_factory = session_factory
         self._adapters = adapters or DocumentAdapterRegistry()
@@ -543,6 +567,7 @@ class UniversalListeningProcessor:
         self._repository = repository or ListeningRepository()
         self._reasoning_bridge = reasoning_bridge
         self._database_health = database_health or get_database_health()
+        self._user_id = user_id
 
     def __call__(self, job: ListeningJob, report: ProgressReporter) -> ProcessingResult:
         artifacts = job.artifacts
@@ -582,7 +607,7 @@ class UniversalListeningProcessor:
                         "document_adapter_version": extracted.adapter_version,
                     },
                 ),
-                DEMO_USER_ID,
+                self._user_id,
             )
             artifacts.normalized_source = source
             artifacts.evidence = evidence
@@ -614,10 +639,10 @@ class UniversalListeningProcessor:
                 "Comparing with existing career evidence",
             )
             with self._session_factory() as session:
-                all_evidence = self._repository.list_evidence(session)
+                all_evidence = self._repository.list_evidence(session, self._user_id)
                 artifacts.compared_clusters = self._engine.fuse(all_evidence)
                 self._repository.persist_clusters(
-                    session, DEMO_USER_ID, artifacts.compared_clusters
+                    session, self._user_id, artifacts.compared_clusters
                 )
 
         report(PipelineStage.GENERATE_PROPOSALS, "Generating knowledge proposals")
@@ -635,17 +660,19 @@ class UniversalListeningProcessor:
             with self._session_factory() as session:
                 self._repository.persist_proposal_links(
                     session,
-                    DEMO_USER_ID,
+                    self._user_id,
                     proposals,
                     artifacts.compared_clusters,
                 )
             artifacts.proposal_links_persisted = True
 
+        if job.source_id is None:
+            raise RuntimeError("Listening persistence did not return a source ID.")
         return ProcessingResult(
-            source_id=source.id,
+            source_id=job.source_id,
             source_type=detection.source_type.value,
             document_type=detection.document_type.value,
             detection_confidence=detection.confidence,
-            evidence_count=len(artifacts.evidence),
+            evidence_count=job.evidence_count,
             proposals=proposals,
         )

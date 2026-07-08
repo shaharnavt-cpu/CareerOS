@@ -228,7 +228,7 @@ class OpenAICompatibleReasoningProvider:
 def build_reasoning_provider(settings: Settings) -> SemanticReasoningProvider:
     """Select a provider without coupling the pipeline to one vendor."""
 
-    if settings.reasoning_provider == "local":
+    if settings.reasoning_provider in {"local", "local-deterministic"}:
         return LocalSemanticReasoningProvider()
     if settings.reasoning_provider == "openai-compatible":
         return OpenAICompatibleReasoningProvider(settings)

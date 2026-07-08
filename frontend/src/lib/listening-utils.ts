@@ -71,6 +71,10 @@ export function friendlyFailureMessage(code: string): string {
       "Career Memory is temporarily unavailable. Your parsed document is safe—retry when PostgreSQL is ready.",
     DATABASE_TIMEOUT:
       "Career Memory took too long to respond. Your parsed document is safe—retry when PostgreSQL is ready.",
+    DATABASE_CONSTRAINT_FAILURE:
+      "CareerOS found conflicting stored evidence. Your parsed document is safe and can be retried.",
+    PERSISTENCE_FAILURE:
+      "CareerOS couldn’t save this evidence. Your parsed document is safe and can be retried.",
     PARSER_FAILED:
       "CareerOS couldn’t parse this file. Export a fresh copy and try again.",
     EMPTY_DOCUMENT: "This document is empty. Add content or choose another file.",

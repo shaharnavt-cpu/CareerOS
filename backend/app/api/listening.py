@@ -114,7 +114,13 @@ def _job_response(
             "database_error": (
                 job.failure.developer_message
                 if job.failure
-                and job.failure.code in {"DATABASE_UNAVAILABLE", "DATABASE_TIMEOUT"}
+                and job.failure.code
+                in {
+                    "DATABASE_UNAVAILABLE",
+                    "DATABASE_TIMEOUT",
+                    "DATABASE_CONSTRAINT_FAILURE",
+                    "PERSISTENCE_FAILURE",
+                }
                 else None
             ),
         }
