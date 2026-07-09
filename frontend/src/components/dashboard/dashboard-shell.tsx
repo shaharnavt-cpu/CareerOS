@@ -62,6 +62,12 @@ export function DashboardShell() {
     }
     if (summary.canonical_total > 0) {
       actions.push({
+        title: "Try Application Intelligence",
+        detail: "Paste a job description and draft from approved memory",
+        action: "Apply",
+        href: "/applications",
+      });
+      actions.push({
         title: "Build stories from approved memory",
         detail: `${summary.canonical_total} approved memor${summary.canonical_total === 1 ? "y is" : "ies are"} available as story ingredients`,
         action: "Stories",

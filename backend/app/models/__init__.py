@@ -1,5 +1,11 @@
 """Career Knowledge Engine persistence models."""
 
+from app.models.application import (
+    ApplicationDraft,
+    ApplicationMemoryMatch,
+    ApplicationOpportunity,
+    ApplicationQuestion,
+)
 from app.models.career import (
     Achievement,
     Education,
@@ -24,6 +30,10 @@ from app.models.user import User, UserPreferences
 
 __all__ = [
     "Achievement",
+    "ApplicationDraft",
+    "ApplicationMemoryMatch",
+    "ApplicationOpportunity",
+    "ApplicationQuestion",
     "CanonicalMemoryRecord",
     "Education",
     "EvidenceItem",
