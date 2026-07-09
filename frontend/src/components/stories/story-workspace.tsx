@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { Brand } from "@/components/common/brand";
+import { WorkspaceNav } from "@/components/common/workspace-nav";
 import {
   getDashboardSummary,
   type CanonicalReviewMemory,
@@ -193,22 +193,7 @@ export function StoryWorkspace() {
 
   return (
     <div className="min-h-screen bg-[#f3f5ef]">
-      <header className="border-b border-[#d9e1db] bg-[#fbfcf8]/95 px-5 py-4 backdrop-blur-xl sm:px-8">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between">
-          <Brand />
-          <nav className="flex items-center gap-2 text-sm font-semibold text-[#52665e]">
-            <Link
-              className="rounded-full px-4 py-2 hover:bg-[#edf3ee]"
-              href="/dashboard"
-            >
-              Career Memory
-            </Link>
-            <span className="rounded-full bg-[#173f35] px-4 py-2 text-white">
-              Stories
-            </span>
-          </nav>
-        </div>
-      </header>
+      <WorkspaceNav active="stories" />
 
       <main className="mx-auto max-w-[1500px] px-5 py-8 sm:px-8 lg:py-10">
         <div className="flex flex-col justify-between gap-5 border-b border-[#d7dfda] pb-7 lg:flex-row lg:items-end">
@@ -224,14 +209,24 @@ export function StoryWorkspace() {
               source, then shape the narratives that feel true to you.
             </p>
           </div>
-          <button
-            className="min-h-11 rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#245849] disabled:opacity-50"
-            disabled={busy}
-            onClick={() => void discover()}
-            type="button"
-          >
-            {busy ? "Working…" : "Discover stories"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="min-h-11 rounded-full border border-[#cbd8d1] px-5 text-sm font-semibold text-[#365e4f] transition hover:bg-white disabled:opacity-50"
+              disabled={busy}
+              onClick={() => void refresh(activeId ?? undefined)}
+              type="button"
+            >
+              Refresh workspace
+            </button>
+            <button
+              className="min-h-11 rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#245849] disabled:opacity-50"
+              disabled={busy}
+              onClick={() => void discover()}
+              type="button"
+            >
+              {busy ? "Working…" : "Discover stories"}
+            </button>
+          </div>
         </div>
 
         <div
@@ -595,10 +590,20 @@ function NarrativeField({
         {label}
       </p>
       <p className="mt-2 text-sm leading-6 text-[#40574e]">
-        {value || "Not enough evidence yet."}
+        {cleanStoryText(value)}
       </p>
     </div>
   );
+}
+
+function cleanStoryText(value: string | null): string {
+  const cleaned = value?.trim();
+  if (!cleaned) return "Not enough evidence yet.";
+  if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$/i.test(cleaned)) {
+    return "Not enough evidence yet.";
+  }
+  if (cleaned.length < 4) return "Not enough evidence yet.";
+  return cleaned;
 }
 
 function toggle(values: Set<string>, value: string): Set<string> {

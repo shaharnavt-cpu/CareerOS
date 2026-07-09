@@ -80,7 +80,7 @@ def _seed_memory(user_id: uuid.UUID) -> dict[str, CanonicalMemoryRecord]:
             {
                 "name": "Technical Skills",
                 "category": "Technical Skills",
-                "skills": ["Python", "SQL", "Excel", "R"],
+                "skills": ["Python", "SQL", "MySQL", "Excel", "R", "LaTeX"],
             },
             ["skill-evidence"],
         ),
@@ -241,9 +241,14 @@ def test_draft_generation_preserves_evidence_and_can_be_edited() -> None:
             )
 
         assert "Gas Kinematics" in draft.draft_text
-        assert draft.draft_text.startswith("A project that prepared me")
+        assert draft.draft_text.startswith("One project that prepared me")
         assert "Tell us about" not in draft.draft_text
         assert "I would highlight" not in draft.draft_text
+        assert "Python" in draft.draft_text
+        assert "SQL" in draft.draft_text
+        assert "Excel" in draft.draft_text
+        assert "LaTeX" not in draft.draft_text
+        assert "MySQL" not in draft.draft_text
         assert "Rejected Tableau Project" not in draft.draft_text
         assert draft.evidence_ids
         assert draft.draft_metadata["uses_approved_memory_only"] is True
@@ -303,6 +308,8 @@ def test_draft_variants_change_length_and_keep_project_primary() -> None:
 
         assert len(short.draft_text.split()) < len(medium.draft_text.split())
         assert len(medium.draft_text.split()) < len(detailed.draft_text.split())
+        assert short.draft_text.split(".")[0] != medium.draft_text.split(".")[0]
+        assert medium.draft_text.split(".")[0] != detailed.draft_text.split(".")[0]
         assert detailed.draft_metadata["variant"] == "detailed"
         assert short.draft_metadata["primary_memory"]["type"] == "PROJECT"
         assert short.draft_metadata["primary_memory"]["title"] == (
@@ -313,6 +320,34 @@ def test_draft_variants_change_length_and_keep_project_primary() -> None:
         }
         assert "SKILL_SET" in support_types
         assert short.draft_metadata["evidence_ids"]
+    finally:
+        _cleanup_user(user_id)
+
+
+def test_draft_without_approved_memory_returns_clear_empty_state() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    service = ApplicationIntelligenceService(user_id=user_id)
+
+    try:
+        with SessionLocal() as session:
+            opportunity = service.create_opportunity(
+                session,
+                ApplicationOpportunityCreateRequest(raw_text=SAMPLE_OPPORTUNITY),
+            )
+            draft = service.generate_draft(
+                session,
+                opportunity.id,
+                ApplicationDraftRequest(
+                    question_id=opportunity.questions[0].id,
+                    draft_type=ApplicationDraftType.QUESTION_ANSWER,
+                ),
+            ).draft
+
+        assert "Application drafts need approved Career Memory" in draft.draft_text
+        assert "I would highlight" not in draft.draft_text
+        assert draft.evidence_ids == []
+        assert draft.draft_metadata["primary_memory"] is None
     finally:
         _cleanup_user(user_id)
 
@@ -348,3 +383,22 @@ def test_application_api_returns_expected_schema() -> None:
     finally:
         app.dependency_overrides.pop(get_application_service, None)
         _cleanup_user(user_id)
+
+
+def test_application_api_rejects_blank_opportunity_with_friendly_message() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/applications/opportunities",
+        json={"raw_text": "   "},
+    )
+
+    assert response.status_code == 422
+    assert (
+        "Paste a job description"
+        in json_text(response.json())
+    )
+
+
+def json_text(value: Any) -> str:
+    return str(value)

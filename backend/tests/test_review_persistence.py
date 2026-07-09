@@ -197,6 +197,25 @@ def test_reject_persists_decision_without_creating_canonical_memory() -> None:
         _cleanup_user(user_id)
 
 
+def test_dashboard_summary_empty_state_is_demo_safe() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    service = ReviewedCareerMemoryService(user_id=user_id)
+
+    try:
+        with SessionLocal() as session:
+            dashboard = service.dashboard(session)
+
+        assert dashboard.canonical_total == 0
+        assert dashboard.pending_review_count == 0
+        assert dashboard.reviewed_count == 0
+        assert dashboard.supporting_evidence_count == 0
+        assert dashboard.recent_memories == []
+        assert dashboard.counts["EDUCATION"] == 0
+    finally:
+        _cleanup_user(user_id)
+
+
 def test_edit_persists_changed_fields_and_promotes_edited_memory() -> None:
     _require_postgres()
     user_id = uuid.uuid4()

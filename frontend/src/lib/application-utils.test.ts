@@ -92,4 +92,31 @@ test("application workspace exposes variant, copy, save, and metadata UI", () =>
   assert.match(source, /Save draft/);
   assert.match(source, /Primary memory/);
   assert.match(source, /approved memory only/);
+  assert.match(source, /Application drafts need approved memory/);
+  assert.match(source, /Load analytics internship sample/);
+  assert.match(source, /specific memory for that signal/);
+});
+
+test("dashboard exposes resilient next actions and demo helpers", () => {
+  const source = readFileSync(
+    new URL("../components/dashboard/dashboard-shell.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /Try Application Intelligence/);
+  assert.match(source, /Review Career Memory/);
+  assert.match(source, /MVP flow progress/);
+  assert.match(source, /Retry dashboard/);
+  assert.match(source, /Reset local demo browser state/);
+});
+
+test("story workspace renders approved memory ingredients safely", () => {
+  const source = readFileSync(
+    new URL("../components/stories/story-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /story ingredients/);
+  assert.match(source, /Refresh workspace/);
+  assert.match(source, /cleanStoryText/);
 });

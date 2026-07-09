@@ -6,12 +6,14 @@ import { useEffect, useMemo, useState } from "react";
 import { KnowledgeSummary } from "@/components/dashboard/knowledge-summary";
 import { ProfileCompleteness } from "@/components/dashboard/profile-completeness";
 import {
+  clearDemoBrowserState,
   getDashboardSummary,
   type DashboardSummary,
 } from "@/lib/knowledge-api";
 
 export function DashboardShell() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState("Loading approved Career Memory…");
 
   useEffect(() => {
@@ -20,6 +22,7 @@ export function DashboardShell() {
       .then((result) => {
         if (cancelled) return;
         setSummary(result);
+        setLoadFailed(false);
         setNotice(
           result.canonical_total
             ? `${result.canonical_total} approved memories are now visible across your dashboard.`
@@ -28,6 +31,7 @@ export function DashboardShell() {
       })
       .catch((error) => {
         if (cancelled) return;
+        setLoadFailed(true);
         setNotice(
           error instanceof Error
             ? error.message
@@ -38,6 +42,10 @@ export function DashboardShell() {
       cancelled = true;
     };
   }, []);
+
+  const demoToolsEnabled =
+    process.env.NEXT_PUBLIC_DEMO_TOOLS === "true" ||
+    process.env.NEXT_PUBLIC_DEVELOPER_TOOLS === "true";
 
   const nextActions = useMemo(() => {
     if (!summary) {
@@ -126,7 +134,18 @@ export function DashboardShell() {
         aria-live="polite"
         className="mt-6 rounded-2xl border border-[#cfe0d6] bg-[#eaf5ee] px-4 py-3 text-sm text-[#3c6655]"
       >
-        {notice}
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <span>{notice}</span>
+          {loadFailed && (
+            <button
+              className="rounded-full border border-[#b8d3c5] bg-white px-3 py-1.5 text-xs font-semibold text-[#2e654f]"
+              onClick={() => window.location.reload()}
+              type="button"
+            >
+              Retry dashboard
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-9 grid gap-5 lg:grid-cols-2">
@@ -191,6 +210,70 @@ export function DashboardShell() {
           </ol>
         </section>
       </div>
+
+      <section className="mt-5 rounded-[26px] border border-[#dce4df] bg-white p-5 sm:p-6">
+        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7d8e87]">
+              MVP flow progress
+            </p>
+            <h2 className="mt-1 text-xl font-semibold text-[#17362d]">
+              Demo-ready career memory loop
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6d7e77]">
+              Listen to sources, approve memories, shape stories, then draft an
+              application answer from approved evidence.
+            </p>
+          </div>
+          <div className="grid gap-2 text-sm sm:grid-cols-2 lg:min-w-[460px]">
+            <ChecklistItem
+              done={(summary?.supporting_evidence_count ?? 0) > 0}
+              label="Evidence saved"
+            />
+            <ChecklistItem
+              done={(summary?.canonical_total ?? 0) > 0}
+              label="Approved memory"
+            />
+            <ChecklistItem
+              done={(summary?.canonical_total ?? 0) >= 3}
+              label="Story ingredients"
+            />
+            <ChecklistItem
+              done={(summary?.canonical_total ?? 0) > 0}
+              label="Application ready"
+            />
+          </div>
+        </div>
+        {demoToolsEnabled && (
+          <button
+            className="mt-4 rounded-full border border-[#d6c9ad] bg-[#fff8e8] px-4 py-2 text-xs font-semibold text-[#76541f]"
+            onClick={() => {
+              clearDemoBrowserState();
+              setNotice(
+                "Local browser demo state cleared. Backend Career Memory was not changed.",
+              );
+            }}
+            type="button"
+          >
+            Reset local demo browser state
+          </button>
+        )}
+      </section>
     </main>
+  );
+}
+
+function ChecklistItem({ done, label }: { done: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-2xl border border-[#e3e9e5] bg-[#fbfcfa] px-3 py-2">
+      <span
+        className={`grid h-5 w-5 place-items-center rounded-full text-[10px] font-bold ${
+          done ? "bg-[#dff2e7] text-[#286247]" : "bg-[#eef1ee] text-[#7d8a84]"
+        }`}
+      >
+        {done ? "✓" : "•"}
+      </span>
+      <span className="font-medium text-[#40574e]">{label}</span>
+    </div>
   );
 }

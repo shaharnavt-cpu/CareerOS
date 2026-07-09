@@ -35,6 +35,26 @@ export function FlowHeader({ current }: { current: number }) {
             ))}
           </ol>
         </nav>
+        <nav
+          aria-label="CareerOS workspaces"
+          className="hidden items-center gap-2 text-xs font-semibold text-[#52635d] xl:flex"
+        >
+          <a className="rounded-full px-3 py-1.5 hover:bg-[#edf3ee]" href="/dashboard">
+            Dashboard
+          </a>
+          <a className="rounded-full px-3 py-1.5 hover:bg-[#edf3ee]" href="/review">
+            Review
+          </a>
+          <a className="rounded-full px-3 py-1.5 hover:bg-[#edf3ee]" href="/stories">
+            Stories
+          </a>
+          <a
+            className="rounded-full px-3 py-1.5 hover:bg-[#edf3ee]"
+            href="/applications"
+          >
+            Applications
+          </a>
+        </nav>
         <span className="rounded-full border border-[#d8e0db] bg-white px-3 py-1.5 text-xs font-medium text-[#52635d] md:hidden">
           Step {current + 1} of 4
         </span>

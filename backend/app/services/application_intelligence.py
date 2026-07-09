@@ -704,9 +704,10 @@ class ApplicationIntelligenceService:
     ) -> str:
         if selection.primary is None:
             return (
-                "I do not yet have enough approved Career Memory to answer this "
-                "prompt well. I would review and approve relevant projects, "
-                "experiences, or skills before drafting a final response."
+                "Application drafts need approved Career Memory before they can "
+                "be generated. Review and approve relevant projects, experiences, "
+                "or skills first, then return here to draft an evidence-backed "
+                "answer."
             )
 
         question_type = self._draft_question_type(question)
@@ -724,22 +725,47 @@ class ApplicationIntelligenceService:
         }:
             sentences = self._why_role_sentences(opportunity, selection)
         else:
-            sentences = self._project_or_experience_sentences(opportunity, selection)
+            sentences = self._project_or_experience_sentences(
+                opportunity, selection, length
+            )
         return self._format_draft(sentences, length)
 
     def _project_or_experience_sentences(
         self,
         opportunity: ApplicationOpportunity,
         selection: DraftMemorySelection,
+        length: ApplicationDraftLength,
     ) -> list[str]:
         primary = selection.primary
         if primary is None:
             return []
         role = self._role_phrase(opportunity)
-        support_skills = self._skills_from_selection(selection)
-        action = self._action_clause(primary, self._skills_from_match(primary))
+        support_skills = self._skills_from_selection(opportunity, selection)
+        primary_skills = self._role_relevant_skills(
+            opportunity, self._skills_from_match(primary)
+        )
+        action = self._action_clause(
+            primary,
+            primary_skills,
+        )
+        primary_phrase = self._memory_phrase(primary)
+        opening = {
+            ApplicationDraftLength.SHORT: (
+                f"{primary_phrase} prepared me for {role} by giving me hands-on "
+                "practice with analysis and communication."
+            ),
+            ApplicationDraftLength.MEDIUM: (
+                f"One project that prepared me for {role} is {primary_phrase}."
+            ),
+        }.get(
+            length,
+            (
+                f"The strongest example of my preparation for {role} is "
+                f"{primary_phrase}."
+            ),
+        )
         sentences = [
-            f"A project that prepared me for {role} is {self._memory_phrase(primary)}.",
+            opening,
             f"In that work, I {action}.",
             (
                 "The project strengthened how I move from technical evidence to a "
@@ -748,12 +774,14 @@ class ApplicationIntelligenceService:
         ]
         if support_skills:
             sentences.append(
-                f"My approved technical foundation also includes "
+                f"My technical foundation includes "
                 f"{self._join_natural(support_skills[:6])}, so I can connect the "
-                "project work to the tools named in the posting."
+                "project work to the tools and responsibilities in the posting."
             )
         sentences.extend(
-            self._supporting_sentences(selection.supporting, skip_skills=True)
+            self._supporting_sentences(
+                opportunity, selection.supporting, skip_skills=True
+            )
         )
         sentences.extend(
             [
@@ -799,8 +827,14 @@ class ApplicationIntelligenceService:
         if primary is None:
             return []
         role = self._role_phrase(opportunity)
-        skills = self._skills_from_selection(selection)
-        action = self._action_clause(primary, self._skills_from_match(primary))
+        skills = self._skills_from_selection(opportunity, selection)
+        primary_skills = self._role_relevant_skills(
+            opportunity, self._skills_from_match(primary)
+        )
+        action = self._action_clause(
+            primary,
+            primary_skills,
+        )
         primary_phrase = self._memory_phrase(primary)
         sentences = [
             (
@@ -815,7 +849,7 @@ class ApplicationIntelligenceService:
             f"I have applied that background through {primary_phrase}.",
             f"In that work, I {action}.",
         ]
-        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(self._supporting_sentences(opportunity, selection.supporting))
         sentences.extend(
             [
                 (
@@ -852,13 +886,16 @@ class ApplicationIntelligenceService:
             ),
             None,
         )
-        action = self._action_clause(primary, self._skills_from_match(primary))
+        primary_skills = self._role_relevant_skills(
+            opportunity, self._skills_from_match(primary)
+        )
+        action = self._action_clause(primary, primary_skills)
         sentences = [
             f"I am a student with {self._education_phrase(education)}.",
             f"The strongest example of how I work is {self._memory_phrase(primary)}.",
             f"In that work, I {action}.",
         ]
-        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(self._supporting_sentences(opportunity, selection.supporting))
         sentences.extend(
             [
                 (
@@ -886,7 +923,10 @@ class ApplicationIntelligenceService:
         if primary is None:
             return []
         role = self._role_phrase(opportunity)
-        action = self._action_clause(primary, self._skills_from_match(primary))
+        primary_skills = self._role_relevant_skills(
+            opportunity, self._skills_from_match(primary)
+        )
+        action = self._action_clause(primary, primary_skills)
         sentences = [
             (
                 f"I am interested in {role} because it brings together "
@@ -895,7 +935,7 @@ class ApplicationIntelligenceService:
             f"My strongest preparation is {self._memory_phrase(primary)}.",
             f"In that work, I {action}.",
         ]
-        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(self._supporting_sentences(opportunity, selection.supporting))
         sentences.extend(
             [
                 (
@@ -927,7 +967,10 @@ class ApplicationIntelligenceService:
             return []
         role = self._role_phrase(opportunity)
         primary_phrase = self._memory_phrase(primary)
-        action = self._action_clause(primary, self._skills_from_match(primary))
+        primary_skills = self._role_relevant_skills(
+            opportunity, self._skills_from_match(primary)
+        )
+        action = self._action_clause(primary, primary_skills)
         sentences = [
             f"One leadership experience that shaped me is {primary_phrase}.",
             f"The situation required me to {action}.",
@@ -937,7 +980,7 @@ class ApplicationIntelligenceService:
                 "effective."
             ),
         ]
-        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(self._supporting_sentences(opportunity, selection.supporting))
         sentences.extend(
             [
                 (
@@ -959,6 +1002,7 @@ class ApplicationIntelligenceService:
 
     def _supporting_sentences(
         self,
+        opportunity: ApplicationOpportunity,
         supporting: list[ApplicationMemoryMatchView],
         *,
         skip_skills: bool = False,
@@ -969,11 +1013,14 @@ class ApplicationIntelligenceService:
             if skip_skills and memory_type is ReviewProposalType.SKILL_SET:
                 continue
             if memory_type is ReviewProposalType.SKILL_SET:
-                skills = self._skills_from_match(match)
+                skills = self._role_relevant_skills(
+                    opportunity, self._skills_from_match(match)
+                )
                 if skills:
                     sentences.append(
-                        f"My {match.memory.title} memory supports this with "
-                        f"{self._join_natural(skills[:6])}."
+                        f"My technical foundation includes "
+                        f"{self._join_natural(skills[:6])}, which aligns with "
+                        "the role's tool expectations."
                     )
                 continue
             if memory_type is ReviewProposalType.EXPERIENCE:
@@ -1183,7 +1230,7 @@ class ApplicationIntelligenceService:
             not in {"internship", "data", "analytics", "data analysis"}
         ]
         chosen = filtered[:3] or labels[:3] or ["clear analysis", "communication"]
-        return self._join_natural([label.casefold() for label in chosen])
+        return self._join_natural([self._display_label(label) for label in chosen])
 
     @staticmethod
     def _memory_phrase(match: ApplicationMemoryMatchView) -> str:
@@ -1246,13 +1293,17 @@ class ApplicationIntelligenceService:
             f"the result clearly{skill_phrase}"
         )
 
-    def _skills_from_selection(self, selection: DraftMemorySelection) -> list[str]:
+    def _skills_from_selection(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
         skills = []
         for match in [selection.primary, *selection.supporting]:
             if match is None:
                 continue
             skills.extend(self._skills_from_match(match))
-        return list(dict.fromkeys(skills))
+        return self._role_relevant_skills(opportunity, skills)
 
     def _skills_from_match(self, match: ApplicationMemoryMatchView) -> list[str]:
         fields = match.memory.structured_fields
@@ -1268,7 +1319,132 @@ class ApplicationIntelligenceService:
             )
             if re.search(pattern, memory_text):
                 skills.append(label)
-        return list(dict.fromkeys(skill for skill in skills if skill))
+        return self._normalize_skill_list(skills)
+
+    def _role_relevant_skills(
+        self,
+        opportunity: ApplicationOpportunity,
+        skills: list[str],
+    ) -> list[str]:
+        normalized = self._normalize_skill_list(skills)
+        if not normalized:
+            return []
+        opportunity_text = " ".join(
+            [
+                opportunity.raw_text,
+                *opportunity.detected_skills,
+                *opportunity.detected_keywords,
+            ]
+        ).casefold()
+        requested = {
+            self._normalize_label(skill)
+            for skill in opportunity.detected_skills + opportunity.detected_keywords
+        }
+        relevant: list[str] = []
+        for skill in normalized:
+            key = self._normalize_label(skill)
+            if key == "latex" and not self._latex_is_relevant(opportunity_text):
+                continue
+            if key == "mysql" and (
+                "sql" in requested or re.search(r"\bsql\b", opportunity_text)
+            ):
+                if "SQL" not in relevant:
+                    relevant.append("SQL")
+                continue
+            if self._skill_matches_opportunity(skill, requested, opportunity_text):
+                relevant.append(skill)
+        if not relevant:
+            relevant = [
+                skill
+                for skill in normalized
+                if self._normalize_label(skill) not in {"latex", "mysql"}
+            ][:4]
+        return self._normalize_skill_list(relevant)[:6]
+
+    @classmethod
+    def _normalize_skill_list(cls, skills: list[str]) -> list[str]:
+        canonical = {
+            "python": "Python",
+            "sql": "SQL",
+            "mysql": "MySQL",
+            "excel": "Excel",
+            "r": "R",
+            "tableau": "Tableau",
+            "power bi": "Power BI",
+            "powerbi": "Power BI",
+            "dashboarding": "dashboarding",
+            "data analysis": "data analysis",
+            "analytics": "analytics",
+            "data visualization": "data visualization",
+            "visualization": "data visualization",
+            "statistics": "statistics",
+            "machine learning": "machine learning",
+            "latex": "LaTeX",
+        }
+        normalized: list[str] = []
+        for skill in skills:
+            key = cls._normalize_label(str(skill))
+            if not key:
+                continue
+            label = canonical.get(key, str(skill).strip())
+            if key == "visual":
+                label = "data visualization"
+            if label not in normalized:
+                normalized.append(label)
+        if "SQL" in normalized and "MySQL" in normalized:
+            normalized.remove("MySQL")
+        return normalized
+
+    @staticmethod
+    def _latex_is_relevant(opportunity_text: str) -> bool:
+        return any(
+            term in opportunity_text
+            for term in (
+                "latex",
+                "research report",
+                "documentation",
+                "technical writing",
+                "academic writing",
+                "publication",
+                "publishing",
+                "paper",
+                "manuscript",
+            )
+        )
+
+    @classmethod
+    def _skill_matches_opportunity(
+        cls,
+        skill: str,
+        requested: set[str],
+        opportunity_text: str,
+    ) -> bool:
+        key = cls._normalize_label(skill)
+        if key in requested:
+            return True
+        if key in {"python", "sql", "excel", "tableau"}:
+            return re.search(rf"\b{re.escape(key)}\b", opportunity_text) is not None
+        if key == "power bi":
+            return "power bi" in opportunity_text or "powerbi" in opportunity_text
+        if key in {"data analysis", "analytics"}:
+            return any(term in opportunity_text for term in ("analysis", "analytics"))
+        if key == "data visualization":
+            return any(
+                term in opportunity_text
+                for term in ("visual", "summary", "summaries", "reporting")
+            )
+        if key == "dashboarding":
+            return any(term in opportunity_text for term in ("dashboard", "reporting"))
+        if key in {"statistics", "machine learning"}:
+            return key in opportunity_text
+        if key == "r":
+            return re.search(r"(?<![a-z])r(?![a-z])", opportunity_text) is not None
+        return key in opportunity_text
+
+    @classmethod
+    def _display_label(cls, label: str) -> str:
+        normalized = cls._normalize_skill_list([label])
+        return normalized[0] if normalized else label
 
     @staticmethod
     def _string_list(value: Any) -> list[str]:

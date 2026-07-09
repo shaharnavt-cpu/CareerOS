@@ -4,6 +4,14 @@
   color-scheme: light;
   --background: #f6f7f2;
   --foreground: #172c25;
+  --cos-ink: #172c25;
+  --cos-muted: #6d7e77;
+  --cos-surface: #fbfcf8;
+  --cos-panel: #ffffff;
+  --cos-border: #dce4df;
+  --cos-forest: #173f35;
+  --cos-signal: #3f8064;
+  --cos-trail: #a7d8bd;
 }
 
 * {

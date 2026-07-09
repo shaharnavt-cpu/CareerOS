@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.knowledge import CanonicalReviewMemory, ReviewProposalType
 
@@ -64,6 +64,15 @@ class ApplicationOpportunityCreateRequest(BaseModel):
     raw_text: str = Field(min_length=1, max_length=100_000)
     title: str | None = Field(default=None, max_length=256)
     organization: str | None = Field(default=None, max_length=256)
+
+    @field_validator("raw_text")
+    @classmethod
+    def raw_text_has_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError(
+                "Paste a job description, internship posting, or application question."
+            )
+        return value
 
 
 class ApplicationQuestionCreateRequest(BaseModel):
