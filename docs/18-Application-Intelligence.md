@@ -53,6 +53,30 @@ CareerOS should not hallucinate unapproved facts. If a posting asks for a skill
 that is not present in approved memory, the workspace shows it as a gap instead
 of inventing experience.
 
+## Draft quality rules
+
+Sprint 9.5 improves the deterministic draft generator so drafts read like
+application answers, not internal planning notes. A generated answer should:
+
+- answer the prompt directly in first person;
+- avoid repeating the question back to the user;
+- avoid phrases such as "I would highlight" or "CareerOS found";
+- choose one primary approved memory and up to two supporting memories;
+- prefer projects or experiences for project/experience questions;
+- use skill sets as support unless the prompt specifically asks about skills;
+- keep evidence IDs and memory selection metadata outside the answer text.
+
+Draft metadata records the primary memory, supporting memories, evidence count,
+approved-memory-only indicator, and gaps. The user can inspect that evidence in
+the workspace without forcing the answer itself to sound like a debug summary.
+
+Supported deterministic variants are:
+
+- Short: a compact answer for small form fields.
+- Medium: a fuller answer with context and role fit.
+- Detailed: a longer answer with setup, actions, supporting evidence, and
+  reflection.
+
 ## Browser extension is out of scope
 
 This sprint intentionally does not build the browser extension. Sprint 9 builds

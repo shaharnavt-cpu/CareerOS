@@ -24,6 +24,7 @@ from app.models import (
     User,
 )
 from app.schemas.applications import (
+    ApplicationDraftLength,
     ApplicationDraftRequest,
     ApplicationDraftStatus,
     ApplicationDraftType,
@@ -240,11 +241,78 @@ def test_draft_generation_preserves_evidence_and_can_be_edited() -> None:
             )
 
         assert "Gas Kinematics" in draft.draft_text
+        assert draft.draft_text.startswith("A project that prepared me")
+        assert "Tell us about" not in draft.draft_text
+        assert "I would highlight" not in draft.draft_text
         assert "Rejected Tableau Project" not in draft.draft_text
         assert draft.evidence_ids
         assert draft.draft_metadata["uses_approved_memory_only"] is True
+        assert draft.draft_metadata["primary_memory"]["title"] == (
+            "Gas Kinematics Honors Capstone"
+        )
+        assert draft.draft_metadata["primary_memory"]["type"] == "PROJECT"
+        assert draft.draft_metadata["supporting_memories"][0]["title"] == (
+            "Technical Skills"
+        )
         assert edited.status is ApplicationDraftStatus.APPROVED
         assert edited.draft_text.endswith("Edited by user.")
+    finally:
+        _cleanup_user(user_id)
+
+
+def test_draft_variants_change_length_and_keep_project_primary() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    _seed_memory(user_id)
+    service = ApplicationIntelligenceService(user_id=user_id)
+
+    try:
+        with SessionLocal() as session:
+            opportunity = service.create_opportunity(
+                session,
+                ApplicationOpportunityCreateRequest(raw_text=SAMPLE_OPPORTUNITY),
+            )
+            question_id = opportunity.questions[0].id
+            short = service.generate_draft(
+                session,
+                opportunity.id,
+                ApplicationDraftRequest(
+                    question_id=question_id,
+                    draft_type=ApplicationDraftType.QUESTION_ANSWER,
+                    length=ApplicationDraftLength.SHORT,
+                ),
+            ).draft
+            medium = service.generate_draft(
+                session,
+                opportunity.id,
+                ApplicationDraftRequest(
+                    question_id=question_id,
+                    draft_type=ApplicationDraftType.QUESTION_ANSWER,
+                    length=ApplicationDraftLength.MEDIUM,
+                ),
+            ).draft
+            detailed = service.generate_draft(
+                session,
+                opportunity.id,
+                ApplicationDraftRequest(
+                    question_id=question_id,
+                    draft_type=ApplicationDraftType.QUESTION_ANSWER,
+                    length=ApplicationDraftLength.DETAILED,
+                ),
+            ).draft
+
+        assert len(short.draft_text.split()) < len(medium.draft_text.split())
+        assert len(medium.draft_text.split()) < len(detailed.draft_text.split())
+        assert detailed.draft_metadata["variant"] == "detailed"
+        assert short.draft_metadata["primary_memory"]["type"] == "PROJECT"
+        assert short.draft_metadata["primary_memory"]["title"] == (
+            "Gas Kinematics Honors Capstone"
+        )
+        support_types = {
+            memory["type"] for memory in short.draft_metadata["supporting_memories"]
+        }
+        assert "SKILL_SET" in support_types
+        assert short.draft_metadata["evidence_ids"]
     finally:
         _cleanup_user(user_id)
 

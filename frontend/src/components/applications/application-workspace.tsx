@@ -10,13 +10,18 @@ import {
   draftApplicationQuestion,
   updateApplicationDraft,
   type ApplicationDraft,
+  type ApplicationDraftLength,
   type ApplicationMemoryMatch,
   type ApplicationOpportunity,
 } from "@/lib/application-api";
 import {
   applicationMatchSummary,
   applicationMemoryTypeLabel,
+  draftPrimaryMemory,
   draftStatusLabel,
+  draftSupportingMemories,
+  draftUsesApprovedMemoryOnly,
+  draftVariantLabel,
   evidenceCountLabel,
 } from "@/lib/application-utils";
 
@@ -35,6 +40,8 @@ export function ApplicationWorkspace() {
   const [drafts, setDrafts] = useState<ApplicationDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [selectedLength, setSelectedLength] =
+    useState<ApplicationDraftLength>("MEDIUM");
   const [notice, setNotice] = useState(
     "Paste a role, posting, or question. Drafts only use approved Career Memory.",
   );
@@ -77,7 +84,7 @@ export function ApplicationWorkspace() {
     try {
       const result = await draftApplicationOpportunity(opportunity.id, {
         draft_type: "GENERAL_RESPONSE",
-        length: "MEDIUM",
+        length: selectedLength,
       });
       setDrafts((current) => [result.draft, ...current]);
       setNotice("Evidence-backed draft generated from approved memories.");
@@ -93,7 +100,7 @@ export function ApplicationWorkspace() {
     try {
       const result = await draftApplicationQuestion(questionId, {
         draft_type: "QUESTION_ANSWER",
-        length: "MEDIUM",
+        length: selectedLength,
       });
       setDrafts((current) => [result.draft, ...current]);
       setNotice("Question draft generated. You can edit and save it.");
@@ -126,6 +133,7 @@ export function ApplicationWorkspace() {
       setNotice("Draft saved. The underlying Career Memory stayed unchanged.");
     } catch (error) {
       setNotice(message(error));
+      throw error;
     }
   }
 
@@ -170,6 +178,10 @@ export function ApplicationWorkspace() {
               id="application-input"
               onChange={(event) => setInput(event.target.value)}
               value={input}
+            />
+            <VariantControl
+              selected={selectedLength}
+              onChange={setSelectedLength}
             />
             <div className="mt-4 flex flex-wrap gap-3">
               <button
@@ -229,6 +241,43 @@ export function ApplicationWorkspace() {
           </section>
         </div>
       </main>
+    </div>
+  );
+}
+
+function VariantControl({
+  selected,
+  onChange,
+}: {
+  selected: ApplicationDraftLength;
+  onChange: (length: ApplicationDraftLength) => void;
+}) {
+  const options: ApplicationDraftLength[] = ["SHORT", "MEDIUM", "DETAILED"];
+  return (
+    <div className="mt-4 rounded-2xl border border-[#dce7e1] bg-[#f8fbf8] p-3">
+      <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#61766d]">
+        Draft variant
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {options.map((option) => (
+          <button
+            className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+              selected === option
+                ? "bg-[#173f35] text-white"
+                : "bg-white text-[#35634f] hover:bg-[#edf4f0]"
+            }`}
+            key={option}
+            onClick={() => onChange(option)}
+            type="button"
+          >
+            {draftVariantLabel(option)}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-xs leading-5 text-[#6f8079]">
+        Short is quick and direct; Medium adds context; Detailed gives a fuller
+        answer structure.
+      </p>
     </div>
   );
 }
@@ -390,6 +439,36 @@ function DraftCard({
   onSave: (draft: ApplicationDraft, draftText: string) => Promise<void>;
 }) {
   const [value, setValue] = useState(draft.draft_text);
+  const [statusText, setStatusText] = useState(draftStatusLabel(draft.status));
+  const [copyStatus, setCopyStatus] = useState("Copy draft");
+  const primaryMemory = draftPrimaryMemory(draft);
+  const supportingMemories = draftSupportingMemories(draft);
+  const approvedOnly = draftUsesApprovedMemoryOnly(draft);
+  const gaps = Array.isArray(draft.draft_metadata.gaps)
+    ? draft.draft_metadata.gaps.map(String)
+    : [];
+
+  async function copyDraft() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus("Copied");
+      window.setTimeout(() => setCopyStatus("Copy draft"), 1600);
+    } catch {
+      setCopyStatus("Copy unavailable");
+      window.setTimeout(() => setCopyStatus("Copy draft"), 1800);
+    }
+  }
+
+  async function save() {
+    setStatusText("Saving...");
+    try {
+      await onSave(draft, value);
+      setStatusText("Saved");
+    } catch {
+      setStatusText("Save failed");
+    }
+  }
+
   return (
     <article className="rounded-2xl border border-[#dfe7e2] bg-[#fbfcfa] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -397,25 +476,63 @@ function DraftCard({
           {draft.draft_type.replaceAll("_", " ")}
         </p>
         <span className="rounded-full bg-[#edf3ef] px-2.5 py-1 text-[10px] font-bold text-[#60746b]">
-          {draftStatusLabel(draft.status)}
+          {statusText}
         </span>
       </div>
+      <div className="mt-3 grid gap-2 rounded-2xl border border-[#e2ebe6] bg-white px-4 py-3 text-xs text-[#60746b]">
+        <p>
+          <span className="font-semibold text-[#2d5043]">Primary memory:</span>{" "}
+          {primaryMemory?.title ?? "Approved memory unavailable"}
+        </p>
+        {supportingMemories.length > 0 && (
+          <p>
+            <span className="font-semibold text-[#2d5043]">
+              Supporting memories:
+            </span>{" "}
+            {supportingMemories.map((memory) => memory.title).join(", ")}
+          </p>
+        )}
+        <p>
+          <span className="font-semibold text-[#2d5043]">Evidence:</span>{" "}
+          {evidenceCountLabel(draft.evidence_ids.length)} ·{" "}
+          {approvedOnly
+            ? "approved memory only"
+            : "review before relying on this draft"}
+        </p>
+        {gaps.length > 0 && (
+          <p>
+            <span className="font-semibold text-[#76541f]">Gaps:</span>{" "}
+            {gaps.join(", ")}
+          </p>
+        )}
+      </div>
       <textarea
-        className="mt-3 min-h-44 w-full resize-y rounded-2xl border border-[#cfdbd4] bg-white p-4 text-sm leading-6 text-[#344e44] outline-none ring-[#dceee5] focus:ring-4"
-        onChange={(event) => setValue(event.target.value)}
+        aria-label="Draft answer editor"
+        className="mt-3 min-h-56 w-full resize-y rounded-2xl border border-[#cfdbd4] bg-white p-4 text-sm leading-6 text-[#344e44] outline-none ring-[#dceee5] focus:ring-4"
+        onChange={(event) => {
+          setValue(event.target.value);
+          setStatusText("Unsaved edits");
+        }}
         value={value}
       />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-[#71817b]">
-          Evidence used: {evidenceCountLabel(draft.evidence_ids.length)}
-        </p>
-        <button
-          className="rounded-full bg-[#214f40] px-4 py-2 text-xs font-semibold text-white"
-          onClick={() => void onSave(draft, value)}
-          type="button"
-        >
-          Save draft
-        </button>
+        <p className="text-xs text-[#71817b]">Copy, edit, then save your version.</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-full border border-[#c7d8cf] px-4 py-2 text-xs font-semibold text-[#35634f]"
+            onClick={() => void copyDraft()}
+            type="button"
+          >
+            {copyStatus}
+          </button>
+          <button
+            className="rounded-full bg-[#214f40] px-4 py-2 text-xs font-semibold text-white"
+            onClick={() => void save()}
+            type="button"
+          >
+            Save draft
+          </button>
+        </div>
       </div>
     </article>
   );

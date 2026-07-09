@@ -70,6 +70,12 @@ class MatchCandidate:
     themes: list[str]
 
 
+@dataclass(frozen=True)
+class DraftMemorySelection:
+    primary: ApplicationMemoryMatchView | None
+    supporting: list[ApplicationMemoryMatchView]
+
+
 class ApplicationNotFoundError(LookupError):
     """Raised when an application resource is not owned by the current user."""
 
@@ -276,18 +282,21 @@ class ApplicationIntelligenceService:
             matches = self._matches_for_scope(
                 session, opportunity.id, request.question_id
             )
-        top_matches = matches[:5]
+        selection = self._select_draft_memories(matches, question)
+        selected_matches = [
+            match for match in [selection.primary, *selection.supporting] if match
+        ]
         draft_text = self._draft_text(
             opportunity,
             question,
-            top_matches,
+            selection,
             request.draft_type,
             request.length,
         )
         evidence_ids = list(
             dict.fromkeys(
                 evidence_id
-                for match in top_matches
+                for match in selected_matches
                 for evidence_id in match.evidence_ids
             )
         )
@@ -307,11 +316,19 @@ class ApplicationIntelligenceService:
             status=ApplicationDraftStatus.DRAFT.value,
             draft_metadata={
                 "length": request.length.value,
+                "variant": self._variant_label(request.length),
                 "uses_approved_memory_only": True,
                 "matched_memory_ids": [
-                    str(match.canonical_memory_id) for match in top_matches
+                    str(match.canonical_memory_id) for match in selected_matches
                 ],
-                "gaps": self._gaps(opportunity, top_matches),
+                "primary_memory": self._draft_memory_metadata(selection.primary),
+                "supporting_memories": [
+                    self._draft_memory_metadata(match)
+                    for match in selection.supporting
+                ],
+                "question_type": question.question_type if question else None,
+                "evidence_ids": evidence_ids,
+                "gaps": self._gaps(opportunity, selected_matches),
             },
         )
         session.add(draft)
@@ -319,7 +336,7 @@ class ApplicationIntelligenceService:
         draft_view = self._draft_view(draft)
         return ApplicationDraftResponse(
             draft=draft_view,
-            matches_used=top_matches,
+            matches_used=selected_matches,
             evidence_used=evidence_ids,
         )
 
@@ -638,109 +655,655 @@ class ApplicationIntelligenceService:
             )
             session.flush()
 
+    def _select_draft_memories(
+        self,
+        matches: list[ApplicationMemoryMatchView],
+        question: ApplicationQuestion | None,
+    ) -> DraftMemorySelection:
+        excluded = {
+            ReviewProposalType.CONTACT,
+            ReviewProposalType.ORGANIZATION,
+            ReviewProposalType.NEEDS_CLASSIFICATION,
+        }
+        unique: list[ApplicationMemoryMatchView] = []
+        seen: set[uuid.UUID] = set()
+        for match in matches:
+            if (
+                match.canonical_memory_id in seen
+                or match.memory.memory_type in excluded
+            ):
+                continue
+            seen.add(match.canonical_memory_id)
+            unique.append(match)
+        if not unique:
+            return DraftMemorySelection(primary=None, supporting=[])
+
+        question_type = self._draft_question_type(question)
+        primary = max(
+            unique,
+            key=lambda match: self._primary_memory_score(match, question_type),
+        )
+        supporting = sorted(
+            [
+                match
+                for match in unique
+                if match.canonical_memory_id != primary.canonical_memory_id
+            ],
+            key=lambda match: self._supporting_memory_score(match, question_type),
+            reverse=True,
+        )[:2]
+        return DraftMemorySelection(primary=primary, supporting=supporting)
+
     def _draft_text(
         self,
         opportunity: ApplicationOpportunity,
         question: ApplicationQuestion | None,
-        matches: list[ApplicationMemoryMatchView],
+        selection: DraftMemorySelection,
         draft_type: ApplicationDraftType,
         length: ApplicationDraftLength,
     ) -> str:
-        del draft_type
-        titles = [match.memory.title for match in matches[:4]]
-        skill_match = next(
+        if selection.primary is None:
+            return (
+                "I do not yet have enough approved Career Memory to answer this "
+                "prompt well. I would review and approve relevant projects, "
+                "experiences, or skills before drafting a final response."
+            )
+
+        question_type = self._draft_question_type(question)
+        if draft_type is ApplicationDraftType.COVER_LETTER_SNIPPET:
+            sentences = self._why_role_sentences(opportunity, selection)
+        elif question_type is ApplicationQuestionType.TECHNICAL_SKILLS:
+            sentences = self._technical_sentences(opportunity, selection)
+        elif question_type is ApplicationQuestionType.LEADERSHIP:
+            sentences = self._leadership_sentences(opportunity, selection)
+        elif question_type is ApplicationQuestionType.TELL_ME_ABOUT_YOURSELF:
+            sentences = self._about_me_sentences(opportunity, selection)
+        elif question_type in {
+            ApplicationQuestionType.WHY_THIS_ROLE,
+            ApplicationQuestionType.WHY_THIS_COMPANY,
+        }:
+            sentences = self._why_role_sentences(opportunity, selection)
+        else:
+            sentences = self._project_or_experience_sentences(opportunity, selection)
+        return self._format_draft(sentences, length)
+
+    def _project_or_experience_sentences(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
+        primary = selection.primary
+        if primary is None:
+            return []
+        role = self._role_phrase(opportunity)
+        support_skills = self._skills_from_selection(selection)
+        action = self._action_clause(primary, self._skills_from_match(primary))
+        sentences = [
+            f"A project that prepared me for {role} is {self._memory_phrase(primary)}.",
+            f"In that work, I {action}.",
             (
-                match
-                for match in matches
-                if match.memory.memory_type is ReviewProposalType.SKILL_SET
+                "The project strengthened how I move from technical evidence to a "
+                "clear conclusion, which is the same habit I bring to analytics work."
             ),
-            None,
+        ]
+        if support_skills:
+            sentences.append(
+                f"My approved technical foundation also includes "
+                f"{self._join_natural(support_skills[:6])}, so I can connect the "
+                "project work to the tools named in the posting."
+            )
+        sentences.extend(
+            self._supporting_sentences(selection.supporting, skip_skills=True)
         )
-        project_match = next(
+        sentences.extend(
+            [
+                (
+                    f"That preparation matches {role} because the opportunity "
+                    f"emphasizes {self._theme_phrase(opportunity)}."
+                ),
+                (
+                    "Because the work involved real research questions, I had to be "
+                    "careful about assumptions, uncertainty, and how much detail "
+                    "belonged in the final explanation."
+                ),
+                (
+                    "That process maps well to analytics work: understand the data, "
+                    "choose the right method, build a concise summary, and explain "
+                    "what the result means for the decision at hand."
+                ),
+                (
+                    "What I took from the experience was not only the technical "
+                    "analysis, but also the discipline of explaining complex work in "
+                    "a way another person can use."
+                ),
+                (
+                    "If I were given a new dataset in this internship, I would bring "
+                    "that same workflow: clarify the question, check the data, test "
+                    "the analysis, and communicate the recommendation clearly."
+                ),
+                (
+                    "I can bring that combination of careful analysis, practical "
+                    "tool use, and clear communication to the internship from the "
+                    "first project I support."
+                ),
+            ]
+        )
+        return sentences
+
+    def _technical_sentences(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
+        primary = selection.primary
+        if primary is None:
+            return []
+        role = self._role_phrase(opportunity)
+        skills = self._skills_from_selection(selection)
+        action = self._action_clause(primary, self._skills_from_match(primary))
+        primary_phrase = self._memory_phrase(primary)
+        sentences = [
             (
-                match
-                for match in matches
-                if match.memory.memory_type is ReviewProposalType.PROJECT
+                f"My strongest technical fit for {role} is my approved foundation "
+                f"in {self._join_natural(skills[:6])}."
+                if skills
+                else (
+                    f"My strongest technical fit for {role} comes from "
+                    f"{primary_phrase}."
+                )
             ),
-            None,
+            f"I have applied that background through {primary_phrase}.",
+            f"In that work, I {action}.",
+        ]
+        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(
+            [
+                (
+                    "That matters for this role because the posting asks for someone "
+                    "who can analyze data, summarize patterns, and communicate the "
+                    "result clearly."
+                ),
+                (
+                    "I am comfortable learning the business context around a dataset "
+                    "and then choosing the right level of technical detail for the "
+                    "audience."
+                ),
+                (
+                    "I would use those skills to help the team turn analysis into "
+                    "useful reporting and recommendations."
+                ),
+            ]
         )
-        experience_match = next(
+        return sentences
+
+    def _about_me_sentences(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
+        primary = selection.primary
+        if primary is None:
+            return []
+        education = next(
             (
                 match
-                for match in matches
-                if match.memory.memory_type is ReviewProposalType.EXPERIENCE
-            ),
-            None,
-        )
-        education_match = next(
-            (
-                match
-                for match in matches
+                for match in [primary, *selection.supporting]
                 if match.memory.memory_type is ReviewProposalType.EDUCATION
             ),
             None,
         )
-        skills = self._skills_from_memory(skill_match.memory if skill_match else None)
-        target = (
-            question.question_text
-            if question is not None
-            else f"this {opportunity.title} opportunity"
-        )
-        opening = (
-            f"For {target}, I would highlight approved experience in "
-            f"{', '.join(titles[:3])}."
-            if titles
-            else "I would keep this answer focused on approved Career Memory."
-        )
-        project_sentence = (
-            f"A strong project example is {project_match.memory.title}, which shows "
-            "hands-on analytical work and the ability to turn technical findings "
-            "into a clear explanation."
-            if project_match
-            else ""
-        )
-        skill_sentence = (
-            f"The relevant approved skills include {', '.join(skills[:6])}, which "
-            "connect directly to the tools and analysis themes in the posting."
-            if skills
-            else ""
-        )
-        experience_sentence = (
-            f"{experience_match.memory.title} adds communication evidence, especially "
-            "around explaining technical ideas to other people."
-            if experience_match
-            else ""
-        )
-        education_sentence = (
-            f"{education_match.memory.title} supports the academic preparation behind "
-            "the analytics work."
-            if education_match
-            else ""
-        )
-        closing = (
-            "I would frame the response around technical rigor, clear communication, "
-            "and using data to create useful recommendations."
-        )
+        action = self._action_clause(primary, self._skills_from_match(primary))
         sentences = [
-            sentence
-            for sentence in (
-                opening,
-                project_sentence,
-                skill_sentence,
-                experience_sentence,
-                education_sentence,
-                closing,
-            )
-            if sentence
+            f"I am a student with {self._education_phrase(education)}.",
+            f"The strongest example of how I work is {self._memory_phrase(primary)}.",
+            f"In that work, I {action}.",
         ]
+        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(
+            [
+                (
+                    "Across those experiences, the common thread is translating "
+                    "technical material into clear, useful decisions or explanations."
+                ),
+                (
+                    f"That is why {self._role_phrase(opportunity)} is a strong fit "
+                    "for me: it combines data, business context, and communication."
+                ),
+                (
+                    "I am looking for work where I can keep building as an analyst "
+                    "while contributing careful, evidence-based thinking to a team."
+                ),
+            ]
+        )
+        return sentences
+
+    def _why_role_sentences(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
+        primary = selection.primary
+        if primary is None:
+            return []
+        role = self._role_phrase(opportunity)
+        action = self._action_clause(primary, self._skills_from_match(primary))
+        sentences = [
+            (
+                f"I am interested in {role} because it brings together "
+                f"{self._theme_phrase(opportunity)}."
+            ),
+            f"My strongest preparation is {self._memory_phrase(primary)}.",
+            f"In that work, I {action}.",
+        ]
+        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(
+            [
+                (
+                    "The role stands out to me because it asks for more than tool "
+                    "knowledge; it asks for someone who can turn analysis into a "
+                    "useful explanation."
+                ),
+                (
+                    "That is the kind of work I have been practicing through my "
+                    "approved projects, technical skill development, and teaching or "
+                    "communication experience."
+                ),
+                (
+                    "I would be excited to contribute that mix of curiosity, rigor, "
+                    "and clear communication while continuing to grow in a real "
+                    "analytics environment."
+                ),
+            ]
+        )
+        return sentences
+
+    def _leadership_sentences(
+        self,
+        opportunity: ApplicationOpportunity,
+        selection: DraftMemorySelection,
+    ) -> list[str]:
+        primary = selection.primary
+        if primary is None:
+            return []
+        role = self._role_phrase(opportunity)
+        primary_phrase = self._memory_phrase(primary)
+        action = self._action_clause(primary, self._skills_from_match(primary))
+        sentences = [
+            f"One leadership experience that shaped me is {primary_phrase}.",
+            f"The situation required me to {action}.",
+            (
+                "My focus was to create structure for other people, communicate "
+                "clearly, and follow through on the work that made the group more "
+                "effective."
+            ),
+        ]
+        sentences.extend(self._supporting_sentences(selection.supporting))
+        sentences.extend(
+            [
+                (
+                    "The result was stronger practice in coordinating people around "
+                    "a shared goal and adjusting my communication to the audience."
+                ),
+                (
+                    f"That prepares me for {role} because analytics work also depends "
+                    "on listening carefully, explaining tradeoffs, and helping others "
+                    "act on information."
+                ),
+                (
+                    "I carry that lesson into team settings: leadership is not just "
+                    "having the answer, but making the work easier for others to use."
+                ),
+            ]
+        )
+        return sentences
+
+    def _supporting_sentences(
+        self,
+        supporting: list[ApplicationMemoryMatchView],
+        *,
+        skip_skills: bool = False,
+    ) -> list[str]:
+        sentences = []
+        for match in supporting:
+            memory_type = match.memory.memory_type
+            if skip_skills and memory_type is ReviewProposalType.SKILL_SET:
+                continue
+            if memory_type is ReviewProposalType.SKILL_SET:
+                skills = self._skills_from_match(match)
+                if skills:
+                    sentences.append(
+                        f"My {match.memory.title} memory supports this with "
+                        f"{self._join_natural(skills[:6])}."
+                    )
+                continue
+            if memory_type is ReviewProposalType.EXPERIENCE:
+                sentences.append(
+                    f"{match.memory.title} adds evidence that I can communicate "
+                    "technical ideas and support other people through complex material."
+                )
+            elif memory_type is ReviewProposalType.PROJECT:
+                sentences.append(
+                    f"{match.memory.title} gives me another approved example of "
+                    "using analysis to reach and explain a conclusion."
+                )
+            elif memory_type is ReviewProposalType.EDUCATION:
+                sentences.append(
+                    f"{match.memory.title} supports the academic preparation behind "
+                    "my interest in the role."
+                )
+            elif memory_type in {
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.ACHIEVEMENT,
+            }:
+                sentences.append(
+                    f"{match.memory.title} adds context for the consistency and "
+                    "initiative behind that work."
+                )
+        return sentences
+
+    @staticmethod
+    def _format_draft(sentences: list[str], length: ApplicationDraftLength) -> str:
+        clean = [sentence for sentence in sentences if sentence]
         if length is ApplicationDraftLength.SHORT:
-            return " ".join(sentences[:3])
-        if length is ApplicationDraftLength.LONG:
-            midpoint = min(3, len(sentences))
-            return (
-                " ".join(sentences[:midpoint]) + "\n\n" + " ".join(sentences[midpoint:])
+            return " ".join(clean[:4])
+        if length is ApplicationDraftLength.MEDIUM:
+            return " ".join(clean[:7])
+        midpoint = min(5, len(clean))
+        return " ".join(clean[:midpoint]) + "\n\n" + " ".join(clean[midpoint:])
+
+    @staticmethod
+    def _variant_label(length: ApplicationDraftLength) -> str:
+        if length is ApplicationDraftLength.SHORT:
+            return "short"
+        if length is ApplicationDraftLength.MEDIUM:
+            return "medium"
+        return "detailed"
+
+    @staticmethod
+    def _draft_question_type(
+        question: ApplicationQuestion | None,
+    ) -> ApplicationQuestionType:
+        if question is None:
+            return ApplicationQuestionType.GENERAL_COVER_LETTER
+        return ApplicationQuestionType(question.question_type)
+
+    def _primary_memory_score(
+        self,
+        match: ApplicationMemoryMatchView,
+        question_type: ApplicationQuestionType,
+    ) -> float:
+        orders = {
+            ApplicationQuestionType.PROJECT_EXPLANATION: (
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.ACHIEVEMENT,
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.EDUCATION,
+            ),
+            ApplicationQuestionType.EXPERIENCE_EXAMPLE: (
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.ACHIEVEMENT,
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.EDUCATION,
+            ),
+            ApplicationQuestionType.TECHNICAL_SKILLS: (
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.EDUCATION,
+            ),
+            ApplicationQuestionType.LEADERSHIP: (
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.ACHIEVEMENT,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.PROJECT,
+            ),
+            ApplicationQuestionType.TELL_ME_ABOUT_YOURSELF: (
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.EDUCATION,
+                ReviewProposalType.SKILL_SET,
+            ),
+        }
+        order = orders.get(
+            question_type,
+            (
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.EDUCATION,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.ACHIEVEMENT,
+            ),
+        )
+        memory_type = match.memory.memory_type
+        rank_bonus = (
+            0.48 - (order.index(memory_type) * 0.06)
+            if memory_type in order
+            else 0
+        )
+        text = self._memory_text_from_view(match.memory).casefold()
+        capstone_bonus = (
+            0.08
+            if any(term in text for term in ("capstone", "kinematics", "morphology"))
+            else 0
+        )
+        evidence_bonus = 0.03 if match.evidence_ids else 0
+        skill_penalty = (
+            0.18
+            if memory_type is ReviewProposalType.SKILL_SET
+            and question_type
+            not in {
+                ApplicationQuestionType.TECHNICAL_SKILLS,
+                ApplicationQuestionType.UNKNOWN,
+            }
+            else 0
+        )
+        return (
+            match.match_score
+            + rank_bonus
+            + capstone_bonus
+            + evidence_bonus
+            - skill_penalty
+        )
+
+    def _supporting_memory_score(
+        self,
+        match: ApplicationMemoryMatchView,
+        question_type: ApplicationQuestionType,
+    ) -> float:
+        if question_type in {
+            ApplicationQuestionType.PROJECT_EXPLANATION,
+            ApplicationQuestionType.EXPERIENCE_EXAMPLE,
+        }:
+            order = (
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.EDUCATION,
+                ReviewProposalType.ACHIEVEMENT,
             )
-        return " ".join(sentences[:5])
+        elif question_type is ApplicationQuestionType.TECHNICAL_SKILLS:
+            order = (
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.EDUCATION,
+                ReviewProposalType.PROGRAM,
+            )
+        else:
+            order = (
+                ReviewProposalType.SKILL_SET,
+                ReviewProposalType.PROJECT,
+                ReviewProposalType.EXPERIENCE,
+                ReviewProposalType.EDUCATION,
+                ReviewProposalType.PROGRAM,
+                ReviewProposalType.ACHIEVEMENT,
+            )
+        memory_type = match.memory.memory_type
+        rank_bonus = (
+            0.22 - (order.index(memory_type) * 0.035)
+            if memory_type in order
+            else 0
+        )
+        return match.match_score + rank_bonus + (0.02 if match.evidence_ids else 0)
+
+    @staticmethod
+    def _draft_memory_metadata(
+        match: ApplicationMemoryMatchView | None,
+    ) -> dict[str, Any] | None:
+        if match is None:
+            return None
+        return {
+            "id": str(match.canonical_memory_id),
+            "title": match.memory.title,
+            "type": match.memory.memory_type.value,
+            "evidence_count": len(match.evidence_ids),
+            "themes_matched": match.themes_matched,
+        }
+
+    @staticmethod
+    def _role_phrase(opportunity: ApplicationOpportunity) -> str:
+        title = opportunity.title.strip().rstrip(".")
+        if not title:
+            return "this role"
+        return f"this {title.casefold()} role"
+
+    def _theme_phrase(self, opportunity: ApplicationOpportunity) -> str:
+        labels = list(
+            dict.fromkeys(opportunity.detected_skills + opportunity.detected_keywords)
+        )
+        filtered = [
+            label
+            for label in labels
+            if label.casefold()
+            not in {"internship", "data", "analytics", "data analysis"}
+        ]
+        chosen = filtered[:3] or labels[:3] or ["clear analysis", "communication"]
+        return self._join_natural([label.casefold() for label in chosen])
+
+    @staticmethod
+    def _memory_phrase(match: ApplicationMemoryMatchView) -> str:
+        title = match.memory.title
+        if match.memory.memory_type is ReviewProposalType.EXPERIENCE:
+            return f"my {title} experience"
+        if title.casefold().startswith(("the ", "my ")):
+            return title
+        return f"my {title}"
+
+    def _education_phrase(self, match: ApplicationMemoryMatchView | None) -> str:
+        if match is None:
+            return "approved academic preparation"
+        fields = match.memory.structured_fields
+        degree = str(fields.get("degree") or "").strip()
+        field = str(
+            fields.get("field_of_study") or fields.get("field") or ""
+        ).strip()
+        institution = str(
+            fields.get("institution_name")
+            or fields.get("institution")
+            or match.memory.title
+        ).strip()
+        parts = [part for part in (degree, field) if part]
+        if parts:
+            return f"{' in '.join(parts)} from {institution}"
+        return f"approved academic preparation from {institution}"
+
+    def _action_clause(
+        self,
+        match: ApplicationMemoryMatchView,
+        skills: list[str],
+    ) -> str:
+        fields = match.memory.structured_fields
+        memory_text = self._memory_text_from_view(match.memory).casefold()
+        skill_phrase = f" using {self._join_natural(skills[:4])}" if skills else ""
+        if match.memory.memory_type is ReviewProposalType.EXPERIENCE:
+            responsibilities = self._string_list(fields.get("responsibilities"))
+            if responsibilities:
+                return self._lower_first(self._join_natural(responsibilities[:2]))
+            return (
+                "explained technical ideas, supported other people, and adapted my "
+                "communication to the audience"
+            )
+        if "gas" in memory_text and "morphology" in memory_text:
+            return (
+                "analyzed spectral and imaging evidence to study gas kinematics "
+                f"and galaxy morphology{skill_phrase}"
+            )
+        if "unicorn" in memory_text:
+            return (
+                "worked with astronomy research data and translated technical "
+                f"findings into clearer outputs{skill_phrase}"
+            )
+        summary = str(fields.get("summary") or fields.get("description") or "").strip()
+        if summary:
+            return f"worked on {self._lower_first(summary.rstrip('.'))}{skill_phrase}"
+        return (
+            "analyzed evidence, organized the important patterns, and explained "
+            f"the result clearly{skill_phrase}"
+        )
+
+    def _skills_from_selection(self, selection: DraftMemorySelection) -> list[str]:
+        skills = []
+        for match in [selection.primary, *selection.supporting]:
+            if match is None:
+                continue
+            skills.extend(self._skills_from_match(match))
+        return list(dict.fromkeys(skills))
+
+    def _skills_from_match(self, match: ApplicationMemoryMatchView) -> list[str]:
+        fields = match.memory.structured_fields
+        skills: list[str] = []
+        for key in ("skills", "methods", "tools"):
+            skills.extend(self._string_list(fields.get(key)))
+        memory_text = self._memory_text_from_view(match.memory).casefold()
+        for needle, label in self.skill_vocab.items():
+            pattern = (
+                r"(?<![a-z])r(?![a-z])"
+                if needle == "r"
+                else rf"\b{re.escape(needle)}\b"
+            )
+            if re.search(pattern, memory_text):
+                skills.append(label)
+        return list(dict.fromkeys(skill for skill in skills if skill))
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @staticmethod
+    def _join_natural(values: list[str]) -> str:
+        clean = [value for value in values if value]
+        if not clean:
+            return ""
+        if len(clean) == 1:
+            return clean[0]
+        if len(clean) == 2:
+            return f"{clean[0]} and {clean[1]}"
+        return f"{', '.join(clean[:-1])}, and {clean[-1]}"
+
+    @staticmethod
+    def _lower_first(value: str) -> str:
+        if not value:
+            return value
+        return value[0].lower() + value[1:]
+
+    @classmethod
+    def _memory_text_from_view(cls, memory: CanonicalReviewMemory) -> str:
+        return " ".join(
+            [
+                memory.title,
+                memory.memory_type.value,
+                cls._flatten(memory.structured_fields),
+            ]
+        )
 
     @staticmethod
     def _skills_from_memory(memory: CanonicalMemoryRecord | None) -> list[str]:

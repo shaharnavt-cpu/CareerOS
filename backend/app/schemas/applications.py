@@ -55,6 +55,8 @@ class ApplicationDraftType(StrEnum):
 class ApplicationDraftLength(StrEnum):
     SHORT = "SHORT"
     MEDIUM = "MEDIUM"
+    DETAILED = "DETAILED"
+    # Backward-compatible alias for Sprint 9 clients.
     LONG = "LONG"
 
 

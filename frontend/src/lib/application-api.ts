@@ -23,7 +23,7 @@ export type ApplicationDraftType =
   | "GENERAL_RESPONSE"
   | "COVER_LETTER_SNIPPET"
   | "QUESTION_ANSWER";
-export type ApplicationDraftLength = "SHORT" | "MEDIUM" | "LONG";
+export type ApplicationDraftLength = "SHORT" | "MEDIUM" | "DETAILED" | "LONG";
 
 export type ApplicationMemory = {
   id: string;
