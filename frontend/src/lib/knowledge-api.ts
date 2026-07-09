@@ -47,11 +47,32 @@ export type Clarification = {
     | "CONFLICTING_EVIDENCE"
     | "LOW_CONFIDENCE";
   detail: string;
+  status?: "OPEN" | "RESOLVED";
+  answer?: string | null;
+  resolved_at?: string | null;
 };
+
+export type ReviewProposalType =
+  | "EDUCATION"
+  | "PROGRAM"
+  | "EXPERIENCE"
+  | "PROJECT"
+  | "SKILL_SET"
+  | "ORGANIZATION"
+  | "ACHIEVEMENT"
+  | "CONTACT"
+  | "NEEDS_CLASSIFICATION";
+
+export type ReviewStatus =
+  | "HIGH_CONFIDENCE"
+  | "NEEDS_REVIEW"
+  | "NEEDS_CLARIFICATION"
+  | "HIDDEN_SUPPORTING_EVIDENCE";
 
 export type KnowledgeProposal = {
   id: string;
   entity_type: EntityType;
+  proposal_type?: ReviewProposalType;
   proposed_value: Record<string, unknown>;
   operation: "CREATE" | "UPDATE" | "LINK";
   confidence: number;
@@ -64,6 +85,11 @@ export type KnowledgeProposal = {
     target_proposal_id: string;
     relationship_type: string;
   }[];
+  review_status?: ReviewStatus;
+  supporting_evidence_count?: number;
+  source_names?: string[];
+  editable?: boolean;
+  clarification_resolved_at?: string | null;
 };
 
 export type ReasoningResponse = {
@@ -83,6 +109,36 @@ const apiBase =
 const proposalStorageKey = "careeros.knowledge-proposals";
 const sourceStorageKey = "careeros.uploaded-source";
 const listeningSourceIdsKey = "careeros.listening-source-ids";
+const reviewSummaryKey = "careeros.review-summary";
+
+export type ReviewSummary = {
+  proposal_count: number;
+  evidence_count: number;
+  hidden_supporting_evidence_count: number;
+};
+
+export type CanonicalReviewMemory = {
+  id: string;
+  memory_type: ReviewProposalType;
+  title: string;
+  structured_fields: Record<string, unknown>;
+  evidence_ids: string[];
+  source_ids: string[];
+  confidence: number;
+  review_proposal_id: string;
+  updated_at: string;
+};
+
+export type DashboardSummary = {
+  counts: Record<string, number>;
+  canonical_total: number;
+  pending_review_count: number;
+  reviewed_count: number;
+  proposal_total: number;
+  supporting_evidence_count: number;
+  profile_completeness: number;
+  recent_memories: CanonicalReviewMemory[];
+};
 
 export type PendingSource = {
   raw_text: string;
@@ -99,6 +155,7 @@ export type ListeningSource = {
   original_filename?: string | null;
   status: "RECEIVED" | "LISTENING" | "READY" | "FAILED";
   evidence_count: number;
+  hidden_supporting_evidence_count: number;
 };
 
 export type PipelineStage =
@@ -310,6 +367,7 @@ export async function generateListeningProposals(
   clusters_considered: number;
   evidence_considered: number;
   provider: string;
+  hidden_supporting_evidence_count: number;
 }> {
   const response = await apiFetch(`${apiBase}/api/listening/proposals`, {
     method: "POST",
@@ -340,6 +398,34 @@ export async function reviewKnowledgeProposal(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ proposal, decision }),
+  });
+  return parseResponse(response);
+}
+
+export async function listReviewProposals(): Promise<KnowledgeProposal[]> {
+  const response = await apiFetch(`${apiBase}/api/knowledge/review-proposals`, {
+    cache: "no-store",
+  });
+  return parseResponse(response);
+}
+
+export async function editReviewProposal(
+  proposal: KnowledgeProposal,
+): Promise<KnowledgeProposal> {
+  const response = await apiFetch(
+    `${apiBase}/api/knowledge/review-proposals/${proposal.id}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proposal }),
+    },
+  );
+  return parseResponse(response);
+}
+
+export async function getDashboardSummary(): Promise<DashboardSummary> {
+  const response = await apiFetch(`${apiBase}/api/knowledge/dashboard`, {
+    cache: "no-store",
   });
   return parseResponse(response);
 }
@@ -404,6 +490,28 @@ export function saveProposals(proposals: KnowledgeProposal[]) {
   }
 }
 
+export function saveReviewSummary(summary: ReviewSummary) {
+  if (typeof window !== "undefined") {
+    window.sessionStorage.setItem(reviewSummaryKey, JSON.stringify(summary));
+  }
+}
+
+export function loadReviewSummary(): ReviewSummary {
+  const fallback = {
+    proposal_count: 0,
+    evidence_count: 0,
+    hidden_supporting_evidence_count: 0,
+  };
+  if (typeof window === "undefined") return fallback;
+  const value = window.sessionStorage.getItem(reviewSummaryKey);
+  if (!value) return fallback;
+  try {
+    return { ...fallback, ...(JSON.parse(value) as Partial<ReviewSummary>) };
+  } catch {
+    return fallback;
+  }
+}
+
 export function loadProposals(): KnowledgeProposal[] {
   if (typeof window === "undefined") return [];
   const value = window.sessionStorage.getItem(proposalStorageKey);
@@ -450,11 +558,35 @@ export function proposalCategory(proposal: KnowledgeProposal) {
 }
 
 export function proposalTitle(proposal: KnowledgeProposal): string {
-  for (const key of ["name", "title", "institution_name", "organization_name"]) {
+  for (const key of [
+    "name",
+    "title",
+    "project_name",
+    "institution_name",
+    "organization_name",
+  ]) {
     const value = proposal.proposed_value[key];
     if (typeof value === "string" && value) return value;
   }
   return proposal.entity_type.toLowerCase();
+}
+
+export function proposalStructuredFields(
+  proposal: KnowledgeProposal,
+): Array<{ label: string; value: string }> {
+  const hidden = new Set(["normalized_name", "institution", "field"]);
+  return Object.entries(proposal.proposed_value)
+    .filter(([key, value]) => !hidden.has(key) && value != null && value !== "")
+    .map(([key, value]) => ({
+      label: key
+        .replaceAll("_", " ")
+        .replace(/\b\w/g, (character) => character.toUpperCase()),
+      value: Array.isArray(value)
+        ? value.map(String).join(", ")
+        : typeof value === "object"
+          ? JSON.stringify(value)
+          : String(value),
+    }));
 }
 
 export function proposalDetail(proposal: KnowledgeProposal): string {

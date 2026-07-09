@@ -8,11 +8,15 @@ import { categoryOrder } from "@/lib/onboarding-data";
 import { evidenceCategoryLabel } from "@/lib/listening-utils";
 import {
   clarificationReasonLabel,
+  editReviewProposal,
+  listReviewProposals,
   loadProposals,
+  loadReviewSummary,
   type KnowledgeProposal,
   proposalCategory,
   proposalDetail,
   proposalPrimaryField,
+  proposalStructuredFields,
   proposalTitle,
   reviewKnowledgeProposal,
   saveProposals,
@@ -20,6 +24,7 @@ import {
 
 export function ReviewWorkspace() {
   const [items, setItems] = useState<KnowledgeProposal[]>([]);
+  const [summary, setSummary] = useState(loadReviewSummary());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -28,12 +33,21 @@ export function ReviewWorkspace() {
   );
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setItems(loadProposals()), 0);
+    const timer = window.setTimeout(() => {
+      setSummary(loadReviewSummary());
+      listReviewProposals()
+        .then((proposals) => {
+          setItems(proposals);
+          saveProposals(proposals);
+        })
+        .catch(() => setItems(loadProposals()));
+    }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
-  const approvedCount = useMemo(
-    () => items.filter((item) => item.approval_state === "CANONICAL").length,
+  const reviewedCount = useMemo(
+    () =>
+      items.filter((item) => item.approval_state !== "NEEDS_REVIEW").length,
     [items],
   );
 
@@ -76,11 +90,11 @@ export function ReviewWorkspace() {
     setDraftTitle(proposalTitle(item));
   }
 
-  function saveEdit(item: KnowledgeProposal) {
+  async function saveEdit(item: KnowledgeProposal) {
     const value = draftTitle.trim();
     if (!value) return;
     const primaryField = proposalPrimaryField(item);
-    updateItem({
+    const edited = {
       ...item,
       proposed_value: {
         ...item.proposed_value,
@@ -91,9 +105,18 @@ export function ReviewWorkspace() {
       },
       clarification: null,
       approval_state: "NEEDS_REVIEW",
-    });
-    setEditingId(null);
-    setNotice("Edit validated locally. Approve it to update Career Memory.");
+    } satisfies KnowledgeProposal;
+    setPendingId(item.id);
+    try {
+      const saved = await editReviewProposal(edited);
+      updateItem(saved);
+      setEditingId(null);
+      setNotice("Edit saved. Approve it to update Career Memory.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Edit could not be saved.");
+    } finally {
+      setPendingId(null);
+    }
   }
 
   return (
@@ -104,22 +127,27 @@ export function ReviewWorkspace() {
             Your review
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-[-0.045em] text-[#142f26] sm:text-5xl">
-            Here’s what I understood.
+            Review your career memories.
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-[#667871]">
-            Review the confidence, evidence, and reasoning behind each proposal.
-            Your decision is the boundary between AI reasoning and Career Memory.
+            CareerOS grouped {summary.evidence_count} saved evidence points into{" "}
+            {items.length} meaningful proposals. Supporting details stay available
+            without crowding the queue.
           </p>
         </div>
         <div className="rounded-2xl border border-[#d6e3db] bg-white px-5 py-4 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#84928d]">
-            Canonical approvals
+            Review progress
           </p>
           <p className="mt-1 text-2xl font-semibold text-[#265a48]">
-            {approvedCount}
+            {reviewedCount}
             <span className="text-sm font-medium text-[#8a9993]">
               /{items.length}
             </span>
+          </p>
+          <p className="mt-1 text-[10px] text-[#84928d]">
+            {summary.hidden_supporting_evidence_count} supporting evidence points
+            saved quietly
           </p>
         </div>
       </div>
@@ -186,7 +214,7 @@ export function ReviewWorkspace() {
                               />
                               <button
                                 className="rounded-xl bg-[#245f4d] px-3 text-xs font-semibold text-white"
-                                onClick={() => saveEdit(item)}
+                                onClick={() => void saveEdit(item)}
                                 type="button"
                               >
                                 Save
@@ -200,11 +228,29 @@ export function ReviewWorkspace() {
                           <p className="mt-1.5 text-sm leading-6 text-[#6a7b74]">
                             {proposalDetail(item)}
                           </p>
+                          <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-[#4d7967]">
+                            {(item.proposal_type ?? item.entity_type).replaceAll("_", " ")}
+                            {item.review_status
+                              ? ` · ${item.review_status.replaceAll("_", " ")}`
+                              : ""}
+                          </p>
                         </div>
                         <StatusBadge status={item.approval_state} />
                       </div>
 
                       <div className="mt-4 grid gap-2 rounded-2xl bg-[#f7f9f6] p-3 text-xs leading-5 text-[#60736b]">
+                        <dl className="grid gap-2 rounded-xl border border-[#e0e8e3] bg-white p-3 sm:grid-cols-2">
+                          {proposalStructuredFields(item).map((field) => (
+                            <div key={field.label}>
+                              <dt className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#7b8d85]">
+                                {field.label}
+                              </dt>
+                              <dd className="mt-0.5 text-xs text-[#29483e]">
+                                {field.value}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
                         <p>
                           <span className="font-semibold text-[#36594b]">
                             Confidence:
@@ -218,7 +264,7 @@ export function ReviewWorkspace() {
                           {item.evidence.map((evidence) => evidence.excerpt).join(" · ")}
                         </p>
                         <div className="mt-1 space-y-2">
-                          {item.evidence.map((evidence, index) => (
+                          {item.evidence.slice(0, 3).map((evidence, index) => (
                             <div
                               className="rounded-xl border border-[#dfe8e2] bg-white p-3"
                               key={
@@ -253,6 +299,23 @@ export function ReviewWorkspace() {
                               </p>
                             </div>
                           ))}
+                          {item.evidence.length > 3 && (
+                            <details className="rounded-xl border border-[#dfe8e2] bg-white p-3">
+                              <summary className="cursor-pointer font-semibold text-[#426657]">
+                                Show {item.evidence.length - 3} more evidence references
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {item.evidence.slice(3).map((evidence, index) => (
+                                  <blockquote
+                                    className="border-l-2 border-[#a9cbbb] pl-2.5 text-[#526860]"
+                                    key={evidence.evidence_id ?? index}
+                                  >
+                                    “{evidence.excerpt}”
+                                  </blockquote>
+                                ))}
+                              </div>
+                            </details>
+                          )}
                         </div>
                         <p>
                           <span className="font-semibold text-[#36594b]">

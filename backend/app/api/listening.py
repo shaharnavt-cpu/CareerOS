@@ -140,6 +140,7 @@ def _job_response(
         detection_confidence=job.detection_confidence,
         extracted_character_count=job.extracted_character_count,
         evidence_count=job.evidence_count,
+        hidden_supporting_evidence_count=job.hidden_supporting_evidence_count,
         persistence_status=job.persistence_status.value,
         failure=failure,
         proposals=job.proposals,

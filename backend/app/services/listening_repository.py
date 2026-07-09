@@ -26,6 +26,7 @@ from app.schemas.listening import (
     ListeningStatus,
     NormalizedListeningSource,
 )
+from app.services.review_repository import ReviewRepository
 
 
 class ListeningRepository:
@@ -148,6 +149,7 @@ class ListeningRepository:
         proposals: list[KnowledgeProposal],
         clusters: list[EvidenceCluster],
     ) -> None:
+        ReviewRepository().upsert_proposals(session, proposals, user_id)
         cluster_by_evidence = {
             item.id: cluster.id for cluster in clusters for item in cluster.evidence
         }

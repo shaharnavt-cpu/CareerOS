@@ -6,6 +6,7 @@ import {
   clarificationReasonLabel,
   type KnowledgeProposal,
   proposalDetail,
+  proposalStructuredFields,
   proposalTitle,
 } from "@/lib/knowledge-api";
 
@@ -62,10 +63,24 @@ export function KnowledgeSection({
               <p className="mt-1.5 text-xs leading-5 text-[#6e7e78]">
                 {proposalDetail(item)}
               </p>
+              <dl className="mt-2 grid gap-1 text-[11px] text-[#65776f]">
+                {proposalStructuredFields(item)
+                  .slice(0, 4)
+                  .map((field) => (
+                    <div className="flex gap-2" key={field.label}>
+                      <dt className="font-semibold text-[#3d5e51]">
+                        {field.label}:
+                      </dt>
+                      <dd>{field.value}</dd>
+                    </div>
+                  ))}
+              </dl>
               <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#73867e]">
                 <span>{Math.round(item.confidence * 100)}% confidence</span>
                 <span>·</span>
-                <span>{item.evidence.length} evidence</span>
+                <span>
+                  {item.supporting_evidence_count ?? item.evidence.length} evidence
+                </span>
               </div>
               {item.evidence[0] && (
                 <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#91a09a]">

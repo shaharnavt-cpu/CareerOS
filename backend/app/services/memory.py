@@ -223,6 +223,11 @@ class CareerMemoryService:
             )
 
         if entity is None:
+            entity = self._find_matching_entity(
+                session, user_id, proposal.entity_type, values
+            )
+
+        if entity is None:
             if proposal.entity_type is EntityType.SKILL:
                 values["confidence_score"] = Decimal(str(proposal.confidence))
             entity = model(user_id=user_id, **values)
@@ -234,6 +239,36 @@ class CareerMemoryService:
                 entity.confidence_score = Decimal(str(proposal.confidence))
 
         return entity
+
+    def _find_matching_entity(
+        self,
+        session: Session,
+        user_id: uuid.UUID,
+        entity_type: EntityType,
+        values: dict[str, Any],
+    ) -> Education | Program | Experience | Project | Achievement | Skill | None:
+        model = self._model_by_type[entity_type]
+        identity_fields = {
+            EntityType.EDUCATION: ("institution_name", "degree", "field_of_study"),
+            EntityType.PROGRAM: ("name", "organization_name"),
+            EntityType.EXPERIENCE: (
+                "organization_name",
+                "title",
+                "start_date",
+                "end_date",
+            ),
+            EntityType.PROJECT: ("title", "start_date", "end_date"),
+            EntityType.ACHIEVEMENT: ("title",),
+            EntityType.SKILL: ("normalized_name",),
+        }[entity_type]
+        conditions = [model.user_id == user_id, model.deleted_at.is_(None)]
+        for field in identity_fields:
+            value = values.get(field)
+            column = getattr(model, field)
+            conditions.append(
+                column == value if value is not None else column.is_(None)
+            )
+        return session.scalar(select(model).where(*conditions))
 
     def _validated_values(self, proposal: KnowledgeProposal) -> dict[str, Any]:
         allowed = self._allowed_fields[proposal.entity_type]

@@ -88,3 +88,77 @@ export function friendlyFailureMessage(code: string): string {
       "CareerOS can’t reach the listening service. Check that the backend is running.",
   }[code] ?? "CareerOS stopped at this stage. Completed work is still available.";
 }
+
+export function reviewSummaryFromJobs(
+  jobs: Array<{
+    source_id?: string | null;
+    evidence_count: number;
+    hidden_supporting_evidence_count?: number;
+    proposals: Array<{ id: string }>;
+  }>,
+) {
+  const bySource = new Map<string, (typeof jobs)[number]>();
+  jobs.forEach((job, index) => {
+    bySource.set(job.source_id ?? `job-${index}`, job);
+  });
+  const proposals = new Set(jobs.flatMap((job) => job.proposals.map((item) => item.id)));
+  return {
+    proposal_count: proposals.size,
+    evidence_count: [...bySource.values()].reduce(
+      (total, job) => total + job.evidence_count,
+      0,
+    ),
+    hidden_supporting_evidence_count: Math.max(
+      0,
+      ...jobs.map((job) => job.hidden_supporting_evidence_count ?? 0),
+    ),
+  };
+}
+
+type ClarifiableProposal = {
+  entity_type: string;
+  proposed_value: Record<string, unknown>;
+  clarification?: unknown;
+  review_status?: string;
+  clarification_resolved_at?: string | null;
+};
+
+export function resolveProposalClarification<T extends ClarifiableProposal>(
+  proposal: T,
+  answer: string,
+): { proposal: T; acknowledgement: string } {
+  const value = answer.trim();
+  const updated = { ...proposal.proposed_value };
+  const department = value.match(/department of [^,.]+/i)?.[0];
+  const organization = value.match(
+    /organization is (?:the )?(.+?)(?:,\s*(?:specifically|under)|\s+under|\.|$)/i,
+  )?.[1];
+
+  if (proposal.entity_type === "EXPERIENCE") {
+    if (organization) {
+      updated.organization_name = organization.trim();
+      updated.organization = organization.trim();
+    } else if (updated.organization_name === "Needs clarification") {
+      updated.organization_name = value.replace(/[.]$/, "");
+    }
+    if (department) updated.department = department;
+  }
+
+  const organizationName = String(
+    updated.organization_name ?? updated.organization ?? "the updated organization",
+  );
+  const acknowledgement = department
+    ? `Got it — I’ll record that as ${organizationName}, ${department}.`
+    : `Got it — I’ll update this memory with ${value.replace(/[.]$/, "")}.`;
+
+  return {
+    proposal: {
+      ...proposal,
+      proposed_value: updated,
+      clarification: undefined,
+      review_status: "NEEDS_REVIEW",
+      clarification_resolved_at: new Date().toISOString(),
+    },
+    acknowledgement,
+  };
+}

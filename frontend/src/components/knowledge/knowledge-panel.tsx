@@ -8,9 +8,13 @@ import { proposalCategory } from "@/lib/knowledge-api";
 export function KnowledgePanel({
   items,
   stage,
+  evidenceCount = 0,
+  hiddenEvidenceCount = 0,
 }: {
   items: KnowledgeProposal[];
   stage: number;
+  evidenceCount?: number;
+  hiddenEvidenceCount?: number;
 }) {
   return (
     <aside className="overflow-hidden rounded-[26px] border border-[#d9e3dc] bg-[#f8faf7] shadow-[0_24px_70px_-48px_rgba(20,58,46,0.65)] lg:sticky lg:top-5 lg:max-h-[calc(100vh-7.5rem)]">
@@ -37,9 +41,15 @@ export function KnowledgePanel({
             />
           </div>
           <span className="text-[10px] font-semibold text-[#80908a]">
-            {items.length} items
+            {items.length} career memories
           </span>
         </div>
+        {evidenceCount > 0 && (
+          <p className="mt-2 text-[10px] text-[#7c8e87]">
+            {evidenceCount} evidence points saved · {hiddenEvidenceCount} supporting
+            details kept quiet
+          </p>
+        )}
       </div>
 
       <div className="space-y-5 overflow-y-auto p-4 lg:max-h-[calc(100vh-14rem)]">

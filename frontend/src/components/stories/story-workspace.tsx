@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Brand } from "@/components/common/brand";
 import {
+  getDashboardSummary,
+  type CanonicalReviewMemory,
+} from "@/lib/knowledge-api";
+import {
   discoverStories,
   listStories,
   mergeStories,
@@ -38,6 +42,9 @@ export function StoryWorkspace() {
     new Set(),
   );
   const [summary, setSummary] = useState("");
+  const [approvedMemories, setApprovedMemories] = useState<
+    CanonicalReviewMemory[]
+  >([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(
     "Stories are suggestions until you approve them.",
@@ -53,8 +60,12 @@ export function StoryWorkspace() {
   async function refresh(preferredId?: string) {
     setBusy(true);
     try {
-      const next = await listStories();
+      const [next, dashboard] = await Promise.all([
+        listStories(),
+        getDashboardSummary(),
+      ]);
       setStories(next);
+      setApprovedMemories(dashboard.recent_memories);
       const candidates = activeStories(next);
       const nextActiveId =
         preferredId && candidates.some((story) => story.id === preferredId)
@@ -233,13 +244,55 @@ export function StoryWorkspace() {
         {visibleStories.length === 0 ? (
           <section className="mt-7 rounded-[28px] border border-dashed border-[#c9d5ce] bg-white p-10 text-center">
             <p className="text-xl font-semibold text-[#27483d]">
-              No active stories yet.
+              Stories will be built from your approved memories.
             </p>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[#708079]">
-              Approve experiences in Career Memory first, then let CareerOS look
-              for goals, organizations, skills, chronology, and recurring
-              themes.
+              CareerOS can look for goals, organizations, skills, chronology,
+              and recurring themes once enough approved Career Memory is
+              available.
             </p>
+            {approvedMemories.length > 0 ? (
+              <div className="mx-auto mt-6 grid max-w-3xl gap-3 text-left md:grid-cols-2">
+                {approvedMemories.map((memory) => (
+                  <article
+                    className="rounded-2xl border border-[#dfe7e2] bg-[#fbfcfa] p-4"
+                    key={memory.id}
+                  >
+                    <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#6f8279]">
+                      {memory.memory_type.replaceAll("_", " ")}
+                    </p>
+                    <h2 className="mt-1 text-sm font-semibold text-[#29483e]">
+                      {memory.title}
+                    </h2>
+                    <p className="mt-2 text-xs leading-5 text-[#71817b]">
+                      {memory.evidence_ids.length} evidence reference
+                      {memory.evidence_ids.length === 1 ? "" : "s"} attached
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="mx-auto mt-4 max-w-lg text-xs leading-5 text-[#81908a]">
+                Approve a few memories in review first; they will show up here
+                as story ingredients.
+              </p>
+            )}
+            <div className="mt-6 flex justify-center gap-3">
+              <Link
+                className="rounded-full border border-[#cbd8d1] px-4 py-2 text-sm font-semibold text-[#365e4f]"
+                href="/review"
+              >
+                Review memories
+              </Link>
+              <button
+                className="rounded-full bg-[#173f35] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={busy || approvedMemories.length === 0}
+                onClick={() => void discover()}
+                type="button"
+              >
+                Discover stories
+              </button>
+            </div>
           </section>
         ) : (
           <div className="mt-7 grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
