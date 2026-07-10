@@ -201,11 +201,31 @@ export async function updateApplicationDraft(
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (response.ok) return (await response.json()) as T;
-  const body = (await response.json().catch(() => null)) as {
-    detail?: string;
-    error?: { message?: string };
-  } | null;
+  const body = (await response.json().catch(() => null)) as unknown;
+  const detail =
+    body && typeof body === "object" && "detail" in body
+      ? (body as { detail?: unknown }).detail
+      : undefined;
+  const message =
+    typeof detail === "string"
+      ? detail
+      : Array.isArray(detail)
+        ? detail
+            .map((item) =>
+              item && typeof item === "object" && "msg" in item
+                ? String((item as { msg?: unknown }).msg)
+                : "",
+            )
+            .filter(Boolean)
+            .join(" ")
+        : body &&
+            typeof body === "object" &&
+            "error" in body &&
+            typeof (body as { error?: { message?: unknown } }).error?.message ===
+              "string"
+          ? String((body as { error: { message: string } }).error.message)
+          : undefined;
   throw new Error(
-    body?.error?.message ?? body?.detail ?? `CareerOS API returned ${response.status}.`,
+    message || `CareerOS API returned ${response.status}.`,
   );
 }

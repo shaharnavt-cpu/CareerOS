@@ -1,13 +1,14 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Brand } from "@/components/common/brand";
+import { WorkspaceNav } from "@/components/common/workspace-nav";
 import {
   createApplicationOpportunity,
   draftApplicationOpportunity,
   draftApplicationQuestion,
+  getApplicationOpportunity,
+  listApplicationOpportunities,
   updateApplicationDraft,
   type ApplicationDraft,
   type ApplicationDraftLength,
@@ -45,6 +46,26 @@ export function ApplicationWorkspace() {
   const [notice, setNotice] = useState(
     "Paste a role, posting, or question. Drafts only use approved Career Memory.",
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    listApplicationOpportunities()
+      .then(async (items) => {
+        if (cancelled || !items.length) return;
+        const latest = await getApplicationOpportunity(items[0].id);
+        if (cancelled) return;
+        setOpportunity(latest);
+        setInput(latest.raw_text);
+        setNotice("Loaded your latest saved application workspace.");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Could not hydrate application workspace", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const generalMatches = useMemo(
     () => opportunity?.matches.filter((match) => match.question_id == null) ?? [],
@@ -139,19 +160,7 @@ export function ApplicationWorkspace() {
 
   return (
     <div className="min-h-screen bg-[#f4f6f0]">
-      <header className="border-b border-[#d9e1db] bg-[#fbfcf8]/95 px-5 py-4 backdrop-blur-xl sm:px-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <Brand />
-          <nav className="flex items-center gap-2 text-sm font-semibold text-[#52665e]">
-            <Link className="rounded-full px-4 py-2 hover:bg-[#edf3ee]" href="/dashboard">
-              Career Memory
-            </Link>
-            <span className="rounded-full bg-[#173f35] px-4 py-2 text-white">
-              Applications
-            </span>
-          </nav>
-        </div>
-      </header>
+      <WorkspaceNav active="applications" />
 
       <main className="mx-auto max-w-7xl px-5 py-9 sm:px-8 lg:py-12">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
@@ -197,7 +206,7 @@ export function ApplicationWorkspace() {
                 onClick={() => setInput(sampleOpportunity)}
                 type="button"
               >
-                Load sample
+                Load analytics internship sample
               </button>
             </div>
             <div
@@ -220,6 +229,7 @@ export function ApplicationWorkspace() {
                 />
                 {opportunity.questions.length > 0 && (
                   <QuestionPanel
+                    canDraft={opportunity.matches.length > 0}
                     draftingId={draftingId}
                     onDraft={draftQuestion}
                     opportunity={opportunity}
@@ -359,7 +369,8 @@ function MatchPanel({
         <div className="mt-4 rounded-2xl border border-[#ead6a9] bg-[#fff8e8] p-4 text-sm text-[#76541f]">
           <p className="font-semibold">Missing evidence</p>
           <p className="mt-1">
-            {gaps.join(", ")} has not been approved in Career Memory yet.
+            {gaps.join(", ")} appears in this posting, but you have not approved
+            a specific memory for that signal yet.
           </p>
         </div>
       )}
@@ -370,10 +381,12 @@ function MatchPanel({
 function QuestionPanel({
   opportunity,
   draftingId,
+  canDraft,
   onDraft,
 }: {
   opportunity: ApplicationOpportunity;
   draftingId: string | null;
+  canDraft: boolean;
   onDraft: (questionId: string) => Promise<void>;
 }) {
   return (
@@ -396,12 +409,18 @@ function QuestionPanel({
             </p>
             <button
               className="mt-3 rounded-full bg-[#173f35] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-              disabled={draftingId === question.id}
+              disabled={draftingId === question.id || !canDraft}
               onClick={() => void onDraft(question.id)}
               type="button"
             >
               {draftingId === question.id ? "Drafting..." : "Draft response"}
             </button>
+            {!canDraft && (
+              <p className="mt-2 text-xs leading-5 text-[#7b8a84]">
+                Application drafts need approved memory before they can be
+                generated. Review career memories first, then return here.
+              </p>
+            )}
           </article>
         ))}
       </div>
@@ -501,7 +520,9 @@ function DraftCard({
         </p>
         {gaps.length > 0 && (
           <p>
-            <span className="font-semibold text-[#76541f]">Gaps:</span>{" "}
+            <span className="font-semibold text-[#76541f]">
+              Still worth strengthening:
+            </span>{" "}
             {gaps.join(", ")}
           </p>
         )}

@@ -544,6 +544,19 @@ export function takeUploadedSource(): PendingSource | null {
   return null;
 }
 
+export function clearDemoBrowserState() {
+  if (typeof window === "undefined") return;
+  [
+    listeningSourceIdsKey,
+    proposalStorageKey,
+    reviewSummaryKey,
+    sourceStorageKey,
+  ].forEach((key) => {
+    window.sessionStorage.removeItem(key);
+    window.localStorage.removeItem(key);
+  });
+}
+
 const categories: Record<EntityType, KnowledgeCategory> = {
   EDUCATION: "Education",
   PROGRAM: "Programs",

@@ -64,6 +64,12 @@ application answers, not internal planning notes. A generated answer should:
 - choose one primary approved memory and up to two supporting memories;
 - prefer projects or experiences for project/experience questions;
 - use skill sets as support unless the prompt specifically asks about skills;
+- normalize tool names such as Python, SQL, Excel, MySQL, R, Tableau, and
+  Power BI;
+- prefer SQL over MySQL when a posting asks for SQL generally;
+- exclude LaTeX unless the opportunity involves writing, documentation,
+  research reports, academic work, or technical publishing;
+- filter supporting skills to the role instead of listing every approved skill;
 - keep evidence IDs and memory selection metadata outside the answer text.
 
 Draft metadata records the primary memory, supporting memories, evidence count,
