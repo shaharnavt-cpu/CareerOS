@@ -129,6 +129,15 @@ export class DiagnosisApiError extends Error {
   }
 }
 
+export function isDuplicateFeedbackError(
+  error: unknown,
+): error is DiagnosisApiError {
+  return (
+    error instanceof DiagnosisApiError &&
+    error.code === "DUPLICATE_FEEDBACK_EVENT"
+  );
+}
+
 const apiBase =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   "http://localhost:8000";

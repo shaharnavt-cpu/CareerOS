@@ -7,11 +7,11 @@ import { WorkspaceNav } from "@/components/common/workspace-nav";
 import {
   createDiagnosisSession,
   createFeedbackEvent,
+  isDuplicateFeedbackError,
   listDiagnosisSessions,
   listFeedbackEvents,
   rerunDiagnosisSession,
   updateFeedbackEvent,
-  DiagnosisApiError,
   type CareerFeedbackEvent,
   type DiagnosisFocus,
   type DiagnosisResult,
@@ -36,6 +36,14 @@ const focusOptions: DiagnosisFocus[] = [
   "GENERAL",
 ];
 
+const duplicateFeedbackMessage =
+  "This looks similar to an existing feedback event. Edit the existing event instead of adding a duplicate.";
+
+type DuplicateFeedbackWarning = {
+  message: string;
+  existingEventId?: string;
+};
+
 export function DiagnosisWorkspace() {
   const [targetRole, setTargetRole] = useState("");
   const [context, setContext] = useState("");
@@ -43,6 +51,8 @@ export function DiagnosisWorkspace() {
   const [diagnosis, setDiagnosis] = useState<DiagnosisSession | null>(null);
   const [feedbackEvents, setFeedbackEvents] = useState<CareerFeedbackEvent[]>([]);
   const [feedbackNote, setFeedbackNote] = useState("");
+  const [duplicateFeedback, setDuplicateFeedback] =
+    useState<DuplicateFeedbackWarning | null>(null);
   const [running, setRunning] = useState(false);
   const [teaching, setTeaching] = useState(false);
   const [notice, setNotice] = useState(
@@ -136,19 +146,28 @@ export function DiagnosisWorkspace() {
       const event = await createFeedbackEvent({ raw_note: note });
       setFeedbackEvents((current) => [event, ...current]);
       setFeedbackNote("");
+      setDuplicateFeedback(null);
       setNotice(
         "Feedback saved as a proposed learning event. Review it before CareerOS uses it.",
       );
     } catch (error) {
-      setNotice(
-        error instanceof DiagnosisApiError &&
-          error.code === "DUPLICATE_FEEDBACK_EVENT"
-          ? "This looks similar to an existing feedback event."
-          : errorMessage(error),
-      );
+      if (isDuplicateFeedbackError(error)) {
+        setDuplicateFeedback({
+          message: duplicateFeedbackMessage,
+          existingEventId: error.existingEventId,
+        });
+        setNotice("No duplicate was created. The existing feedback event is unchanged.");
+      } else {
+        setNotice(errorMessage(error));
+      }
     } finally {
       setTeaching(false);
     }
+  }
+
+  function changeFeedbackNote(value: string) {
+    setFeedbackNote(value);
+    setDuplicateFeedback(null);
   }
 
   async function changeFeedbackStatus(
@@ -312,9 +331,10 @@ export function DiagnosisWorkspace() {
         )}
 
         <TeachCareerOSPanel
+          duplicateWarning={duplicateFeedback}
           events={feedbackEvents}
           note={feedbackNote}
-          onChangeNote={setFeedbackNote}
+          onChangeNote={changeFeedbackNote}
           onChangeStatus={changeFeedbackStatus}
           onEdit={editFeedbackEvent}
           onTeach={teachCareerOS}
@@ -626,6 +646,7 @@ function BriefPanel({
 }
 
 function TeachCareerOSPanel({
+  duplicateWarning,
   events,
   note,
   onChangeNote,
@@ -634,6 +655,7 @@ function TeachCareerOSPanel({
   onTeach,
   teaching,
 }: {
+  duplicateWarning: DuplicateFeedbackWarning | null;
   events: CareerFeedbackEvent[];
   note: string;
   onChangeNote: (value: string) => void;
@@ -685,6 +707,20 @@ function TeachCareerOSPanel({
             placeholder="Example: This cover letter led to an interview invite."
             value={note}
           />
+          {duplicateWarning && (
+            <div
+              aria-live="assertive"
+              className="mt-3 rounded-2xl border border-[#e2c986] bg-[#fff8e5] px-4 py-3 text-sm leading-6 text-[#72521e]"
+              role="alert"
+            >
+              <p className="font-semibold">{duplicateWarning.message}</p>
+              {duplicateWarning.existingEventId && (
+                <p className="mt-1 text-xs text-[#866a38]">
+                  The matching event is highlighted in the list.
+                </p>
+              )}
+            </div>
+          )}
           <button
             className="mt-3 min-h-11 rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white disabled:opacity-60"
             disabled={teaching}
@@ -706,7 +742,19 @@ function TeachCareerOSPanel({
               </p>
             )}
             {events.map((event) => (
-              <article className="rounded-2xl border border-[#e1e8e4] bg-[#fbfcfa] p-4" key={event.id}>
+              <article
+                className={`rounded-2xl border p-4 ${
+                  duplicateWarning?.existingEventId === event.id
+                    ? "border-[#d1ad52] bg-[#fff9e9] ring-2 ring-[#f1dfae]"
+                    : "border-[#e1e8e4] bg-[#fbfcfa]"
+                }`}
+                key={event.id}
+              >
+                {duplicateWarning?.existingEventId === event.id && (
+                  <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#8b672e]">
+                    Similar existing event
+                  </p>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-[#e9f3ed] px-2.5 py-1 text-[10px] font-bold text-[#3e7159]">
                     {feedbackEventTypeLabel(event.event_type)}
