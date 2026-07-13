@@ -17,6 +17,8 @@ test("diagnosis helpers produce judgment-specific labels", () => {
   assert.equal(evidenceStrengthLabel("STRONG"), "Strong evidence");
   assert.equal(feedbackEventTypeLabel("POSITIONING_RULE"), "Positioning rule");
   assert.equal(feedbackStatusLabel("PROPOSED"), "Proposed");
+  assert.equal(feedbackStatusLabel("APPROVED"), "Approved");
+  assert.equal(feedbackStatusLabel("ARCHIVED"), "Archived");
 });
 
 test("diagnosis route renders the workspace", () => {
@@ -61,10 +63,43 @@ test("Teach CareerOS input and feedback event review controls render", () => {
   );
 
   assert.match(source, /Teach CareerOS note/);
+  assert.match(source, /const \[feedbackNote, setFeedbackNote\] = useState\(""\)/);
+  assert.match(
+    source,
+    /placeholder="Example: This cover letter led to an interview invite\."/,
+  );
+  assert.doesNotMatch(source, /Black Box AI Engineer Intern/);
   assert.match(source, /Save and teach/);
   assert.match(source, /Recent feedback events/);
+  assert.match(source, /Edit event/);
+  assert.match(source, /Save changes/);
+  assert.match(source, /This looks similar to an existing feedback event\./);
+  assert.match(
+    source,
+    /Edit the existing event instead of adding a duplicate\./,
+  );
+  assert.match(source, /role="alert"/);
+  assert.match(source, /Similar existing event/);
   assert.match(source, /Approve guidance/);
+  assert.match(source, /Approved guidance can influence future diagnosis/);
+  assert.match(source, /Archived events are excluded from future diagnosis/);
   assert.match(source, /Archive/);
+  assert.match(source, /Outcome signals · not canonical proof/);
+
+  const teachHandler = source.slice(
+    source.indexOf("async function teachCareerOS()"),
+    source.indexOf("async function changeFeedbackStatus"),
+  );
+  assert.match(teachHandler, /if \(isDuplicateFeedbackError\(error\)\)/);
+  assert.match(teachHandler, /setDuplicateFeedback\(null\)/);
+  assert.equal(teachHandler.match(/setFeedbackNote\(""\)/g)?.length, 1);
+  const duplicateCatch = teachHandler.slice(teachHandler.indexOf("} catch"));
+  assert.doesNotMatch(duplicateCatch, /setFeedbackNote\(""\)/);
+
+  assert.match(
+    source,
+    /function changeFeedbackNote\(value: string\)[\s\S]*setDuplicateFeedback\(null\)/,
+  );
 });
 
 test("navigation and dashboard link to Career Diagnosis", () => {

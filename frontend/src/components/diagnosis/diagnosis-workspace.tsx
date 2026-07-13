@@ -7,6 +7,7 @@ import { WorkspaceNav } from "@/components/common/workspace-nav";
 import {
   createDiagnosisSession,
   createFeedbackEvent,
+  isDuplicateFeedbackError,
   listDiagnosisSessions,
   listFeedbackEvents,
   rerunDiagnosisSession,
@@ -35,6 +36,14 @@ const focusOptions: DiagnosisFocus[] = [
   "GENERAL",
 ];
 
+const duplicateFeedbackMessage =
+  "This looks similar to an existing feedback event. Edit the existing event instead of adding a duplicate.";
+
+type DuplicateFeedbackWarning = {
+  message: string;
+  existingEventId?: string;
+};
+
 export function DiagnosisWorkspace() {
   const [targetRole, setTargetRole] = useState("");
   const [context, setContext] = useState("");
@@ -42,6 +51,8 @@ export function DiagnosisWorkspace() {
   const [diagnosis, setDiagnosis] = useState<DiagnosisSession | null>(null);
   const [feedbackEvents, setFeedbackEvents] = useState<CareerFeedbackEvent[]>([]);
   const [feedbackNote, setFeedbackNote] = useState("");
+  const [duplicateFeedback, setDuplicateFeedback] =
+    useState<DuplicateFeedbackWarning | null>(null);
   const [running, setRunning] = useState(false);
   const [teaching, setTeaching] = useState(false);
   const [notice, setNotice] = useState(
@@ -135,14 +146,28 @@ export function DiagnosisWorkspace() {
       const event = await createFeedbackEvent({ raw_note: note });
       setFeedbackEvents((current) => [event, ...current]);
       setFeedbackNote("");
+      setDuplicateFeedback(null);
       setNotice(
         "Feedback saved as a proposed learning event. Review it before CareerOS uses it.",
       );
     } catch (error) {
-      setNotice(errorMessage(error));
+      if (isDuplicateFeedbackError(error)) {
+        setDuplicateFeedback({
+          message: duplicateFeedbackMessage,
+          existingEventId: error.existingEventId,
+        });
+        setNotice("No duplicate was created. The existing feedback event is unchanged.");
+      } else {
+        setNotice(errorMessage(error));
+      }
     } finally {
       setTeaching(false);
     }
+  }
+
+  function changeFeedbackNote(value: string) {
+    setFeedbackNote(value);
+    setDuplicateFeedback(null);
   }
 
   async function changeFeedbackStatus(
@@ -161,6 +186,32 @@ export function DiagnosisWorkspace() {
       );
     } catch (error) {
       setNotice(errorMessage(error));
+    }
+  }
+
+  async function editFeedbackEvent(
+    event: CareerFeedbackEvent,
+    rawNote: string,
+  ): Promise<boolean> {
+    const correctedNote = rawNote.trim();
+    if (!correctedNote) {
+      setNotice("A feedback event needs a note before it can be saved.");
+      return false;
+    }
+    try {
+      const updated = await updateFeedbackEvent(event.id, {
+        raw_note: correctedNote,
+      });
+      setFeedbackEvents((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setNotice(
+        "Feedback event corrected and reparsed. Its review status was preserved.",
+      );
+      return true;
+    } catch (error) {
+      setNotice(errorMessage(error));
+      return false;
     }
   }
 
@@ -280,10 +331,12 @@ export function DiagnosisWorkspace() {
         )}
 
         <TeachCareerOSPanel
+          duplicateWarning={duplicateFeedback}
           events={feedbackEvents}
           note={feedbackNote}
-          onChangeNote={setFeedbackNote}
+          onChangeNote={changeFeedbackNote}
           onChangeStatus={changeFeedbackStatus}
+          onEdit={editFeedbackEvent}
           onTeach={teachCareerOS}
           teaching={teaching}
         />
@@ -354,6 +407,8 @@ function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
 
       <EvidenceMap result={result} />
 
+      <OutcomeSignals signals={result.outcome_signals} />
+
       <div className="grid gap-5 lg:grid-cols-2">
         <BriefPanel eyebrow="Recognition Gap" title="What is not being recognized yet">
           <p className="text-sm leading-7 text-[#5e7169]">{result.recognition_gap}</p>
@@ -397,6 +452,38 @@ function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
         <ExactMessages messages={result.exact_messages} />
       </div>
     </div>
+  );
+}
+
+function OutcomeSignals({ signals }: { signals: DiagnosisResult["outcome_signals"] }) {
+  if (!signals.length) return null;
+  return (
+    <section className="rounded-[28px] border border-[#d9d2ec] bg-[#f7f4fc] p-6 sm:p-7">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#76609b]">
+        Outcome signals · not canonical proof
+      </p>
+      <h2 className="mt-1 text-2xl font-semibold text-[#33284a]">
+        Approved results that can guide strategy
+      </h2>
+      <div className="mt-5 space-y-4">
+        {signals.map((signal) => (
+          <article
+            className="rounded-2xl border border-[#e2dcf0] bg-white/80 p-5"
+            key={signal.feedback_event_id}
+          >
+            <p className="text-sm font-semibold leading-6 text-[#4d4067]">
+              {signal.summary}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-[#665b7d]">
+              Future use: {signal.guidance}
+            </p>
+            <p className="mt-3 text-xs leading-5 text-[#817694]">
+              {signal.caveat}
+            </p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -559,13 +646,16 @@ function BriefPanel({
 }
 
 function TeachCareerOSPanel({
+  duplicateWarning,
   events,
   note,
   onChangeNote,
   onChangeStatus,
+  onEdit,
   onTeach,
   teaching,
 }: {
+  duplicateWarning: DuplicateFeedbackWarning | null;
   events: CareerFeedbackEvent[];
   note: string;
   onChangeNote: (value: string) => void;
@@ -573,9 +663,29 @@ function TeachCareerOSPanel({
     event: CareerFeedbackEvent,
     status: FeedbackEventStatus,
   ) => Promise<void>;
+  onEdit: (event: CareerFeedbackEvent, rawNote: string) => Promise<boolean>;
   onTeach: () => Promise<void>;
   teaching: boolean;
 }) {
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editNote, setEditNote] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  function beginEdit(event: CareerFeedbackEvent) {
+    setEditingEventId(event.id);
+    setEditNote(event.raw_note);
+  }
+
+  async function saveEdit(event: CareerFeedbackEvent) {
+    setSavingEdit(true);
+    const saved = await onEdit(event, editNote);
+    setSavingEdit(false);
+    if (saved) {
+      setEditingEventId(null);
+      setEditNote("");
+    }
+  }
+
   return (
     <section className="mt-5 rounded-[28px] border border-[#dce4df] bg-white p-6 sm:p-8">
       <div className="grid gap-7 lg:grid-cols-[0.9fr_1.1fr]">
@@ -594,9 +704,23 @@ function TeachCareerOSPanel({
             aria-label="Teach CareerOS note"
             className="mt-5 min-h-36 w-full resize-y rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] p-4 text-sm leading-6 text-[#29483e] outline-none ring-[#dceee5] placeholder:text-[#96a39d] focus:ring-4"
             onChange={(event) => onChangeNote(event.target.value)}
-            placeholder="The Black Box AI Engineer Intern cover letter led to an interview invite."
+            placeholder="Example: This cover letter led to an interview invite."
             value={note}
           />
+          {duplicateWarning && (
+            <div
+              aria-live="assertive"
+              className="mt-3 rounded-2xl border border-[#e2c986] bg-[#fff8e5] px-4 py-3 text-sm leading-6 text-[#72521e]"
+              role="alert"
+            >
+              <p className="font-semibold">{duplicateWarning.message}</p>
+              {duplicateWarning.existingEventId && (
+                <p className="mt-1 text-xs text-[#866a38]">
+                  The matching event is highlighted in the list.
+                </p>
+              )}
+            </div>
+          )}
           <button
             className="mt-3 min-h-11 rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white disabled:opacity-60"
             disabled={teaching}
@@ -618,7 +742,19 @@ function TeachCareerOSPanel({
               </p>
             )}
             {events.map((event) => (
-              <article className="rounded-2xl border border-[#e1e8e4] bg-[#fbfcfa] p-4" key={event.id}>
+              <article
+                className={`rounded-2xl border p-4 ${
+                  duplicateWarning?.existingEventId === event.id
+                    ? "border-[#d1ad52] bg-[#fff9e9] ring-2 ring-[#f1dfae]"
+                    : "border-[#e1e8e4] bg-[#fbfcfa]"
+                }`}
+                key={event.id}
+              >
+                {duplicateWarning?.existingEventId === event.id && (
+                  <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#8b672e]">
+                    Similar existing event
+                  </p>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-[#e9f3ed] px-2.5 py-1 text-[10px] font-bold text-[#3e7159]">
                     {feedbackEventTypeLabel(event.event_type)}
@@ -630,25 +766,93 @@ function TeachCareerOSPanel({
                 <p className="mt-3 text-sm leading-6 text-[#50665d]">
                   {event.structured_summary}
                 </p>
+                {event.artifact_label && (
+                  <p className="mt-2 text-xs font-semibold text-[#667970]">
+                    Artifact: {event.artifact_label}
+                    {event.outcome
+                      ? ` · Outcome: ${event.outcome.replaceAll("_", " ").toLowerCase()}`
+                      : ""}
+                  </p>
+                )}
                 <p className="mt-2 text-xs leading-5 text-[#7a8983]">
                   Future use: {event.suggested_future_use}
                 </p>
-                {event.status === "PROPOSED" && (
-                  <div className="mt-3 flex gap-2">
+                <p className="mt-2 text-xs font-semibold leading-5 text-[#64766f]">
+                  {event.status === "APPROVED"
+                    ? "Approved guidance can influence future diagnosis; artifact outcomes remain labeled signals, not proof."
+                    : event.status === "ARCHIVED"
+                      ? "Archived events are excluded from future diagnosis guidance."
+                      : "Proposed events wait for your review before guiding diagnosis."}
+                </p>
+                {editingEventId === event.id ? (
+                  <div className="mt-4 rounded-2xl border border-[#d8e2dc] bg-white p-3">
+                    <label className="text-xs font-bold text-[#48675a]">
+                      Correct feedback event
+                      <textarea
+                        aria-label="Edit feedback event note"
+                        className="mt-2 min-h-28 w-full resize-y rounded-xl border border-[#cfdbd4] bg-[#fbfcfa] p-3 text-sm font-normal leading-6 text-[#29483e] outline-none"
+                        onChange={(event) => setEditNote(event.target.value)}
+                        value={editNote}
+                      />
+                    </label>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                        disabled={savingEdit}
+                        onClick={() => void saveEdit(event)}
+                        type="button"
+                      >
+                        {savingEdit ? "Saving…" : "Save changes"}
+                      </button>
+                      <button
+                        className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                        disabled={savingEdit}
+                        onClick={() => {
+                          setEditingEventId(null);
+                          setEditNote("");
+                        }}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white"
-                      onClick={() => void onChangeStatus(event, "APPROVED")}
+                      className="rounded-full border border-[#c9d9d0] px-3 py-1.5 text-xs font-semibold text-[#456b59]"
+                      onClick={() => beginEdit(event)}
                       type="button"
                     >
-                      Approve guidance
+                      Edit event
                     </button>
-                    <button
-                      className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
-                      onClick={() => void onChangeStatus(event, "ARCHIVED")}
-                      type="button"
-                    >
-                      Archive
-                    </button>
+                    {event.status === "PROPOSED" && (
+                      <>
+                        <button
+                          className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white"
+                          onClick={() => void onChangeStatus(event, "APPROVED")}
+                          type="button"
+                        >
+                          Approve guidance
+                        </button>
+                        <button
+                          className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                          onClick={() => void onChangeStatus(event, "ARCHIVED")}
+                          type="button"
+                        >
+                          Archive
+                        </button>
+                      </>
+                    )}
+                    {event.status === "APPROVED" && (
+                      <button
+                        className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                        onClick={() => void onChangeStatus(event, "ARCHIVED")}
+                        type="button"
+                      >
+                        Archive
+                      </button>
+                    )}
                   </div>
                 )}
               </article>

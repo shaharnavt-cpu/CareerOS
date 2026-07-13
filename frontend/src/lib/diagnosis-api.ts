@@ -24,6 +24,16 @@ export type FeedbackEventType =
 
 export type FeedbackEventStatus = "PROPOSED" | "APPROVED" | "ARCHIVED";
 
+export type FeedbackArtifactType =
+  | "COVER_LETTER"
+  | "RESUME"
+  | "APPLICATION"
+  | "DRAFT"
+  | "PROJECT"
+  | "OTHER";
+
+export type FeedbackOutcomeType = "INTERVIEW_INVITE" | "CALLBACK" | "OFFER";
+
 export type DiagnosisEvidenceItem = {
   memory_id: string;
   memory_title: string;
@@ -45,6 +55,16 @@ export type ProofSprint = {
   application_use: string;
 };
 
+export type OutcomeSignal = {
+  feedback_event_id: string;
+  artifact_type?: FeedbackArtifactType | null;
+  artifact_label?: string | null;
+  outcome?: FeedbackOutcomeType | null;
+  summary: string;
+  guidance: string;
+  caveat: string;
+};
+
 export type DiagnosisResult = {
   id: string;
   session_id: string;
@@ -60,6 +80,7 @@ export type DiagnosisResult = {
   confidence: number;
   evidence_ids: string[];
   feedback_event_ids: string[];
+  outcome_signals: OutcomeSignal[];
   diagnosis_version: string;
   created_at: string;
   updated_at: string;
@@ -83,6 +104,10 @@ export type CareerFeedbackEvent = {
   raw_note: string;
   event_type: FeedbackEventType;
   structured_summary: string;
+  artifact_type?: FeedbackArtifactType | null;
+  artifact_label?: string | null;
+  outcome?: FeedbackOutcomeType | null;
+  event_metadata: Record<string, unknown>;
   related_memory_ids: string[];
   related_opportunity_id?: string | null;
   related_draft_id?: string | null;
@@ -91,6 +116,27 @@ export type CareerFeedbackEvent = {
   created_at: string;
   updated_at: string;
 };
+
+export class DiagnosisApiError extends Error {
+  code?: string;
+  existingEventId?: string;
+
+  constructor(message: string, code?: string, existingEventId?: string) {
+    super(message);
+    this.name = "DiagnosisApiError";
+    this.code = code;
+    this.existingEventId = existingEventId;
+  }
+}
+
+export function isDuplicateFeedbackError(
+  error: unknown,
+): error is DiagnosisApiError {
+  return (
+    error instanceof DiagnosisApiError &&
+    error.code === "DUPLICATE_FEEDBACK_EVENT"
+  );
+}
 
 const apiBase =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
@@ -165,8 +211,28 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const message =
     typeof detail === "string"
       ? detail
+      : detail &&
+          typeof detail === "object" &&
+          "message" in detail &&
+          typeof (detail as { message?: unknown }).message === "string"
+        ? (detail as { message: string }).message
       : typeof structured?.message === "string"
         ? structured.message
         : `CareerOS API returned ${response.status}.`;
-  throw new Error(message);
+  const code =
+    detail &&
+    typeof detail === "object" &&
+    "code" in detail &&
+    typeof (detail as { code?: unknown }).code === "string"
+      ? (detail as { code: string }).code
+      : undefined;
+  const existingEventId =
+    detail &&
+    typeof detail === "object" &&
+    "existing_event_id" in detail &&
+    typeof (detail as { existing_event_id?: unknown }).existing_event_id ===
+      "string"
+      ? (detail as { existing_event_id: string }).existing_event_id
+      : undefined;
+  throw new DiagnosisApiError(message, code, existingEventId);
 }
