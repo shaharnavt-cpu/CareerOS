@@ -76,6 +76,12 @@ export function DashboardShell() {
         href: "/diagnosis",
       });
       actions.push({
+        title: "Build a proof artifact",
+        detail: "Turn approved memory into a one-page role-specific case study",
+        action: "Build",
+        href: "/proof-artifacts",
+      });
+      actions.push({
         title: "Try Application Intelligence",
         detail: "Paste a job description and draft from approved memory",
         action: "Apply",

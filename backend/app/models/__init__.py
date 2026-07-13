@@ -25,6 +25,7 @@ from app.models.listening import (
     ListeningProposalEvidenceLink,
     ListeningSource,
 )
+from app.models.proof_artifact import ProofArtifact, ProofArtifactVersion
 from app.models.review import CanonicalMemoryRecord, ReviewProposal
 from app.models.story import Story, StoryChapter, StoryEvidence, StoryMembership
 from app.models.user import User, UserPreferences
@@ -50,6 +51,8 @@ __all__ = [
     "ListeningSource",
     "Program",
     "ProgramLink",
+    "ProofArtifact",
+    "ProofArtifactVersion",
     "Project",
     "ReviewProposal",
     "Skill",
