@@ -11,6 +11,7 @@ import {
   listFeedbackEvents,
   rerunDiagnosisSession,
   updateFeedbackEvent,
+  DiagnosisApiError,
   type CareerFeedbackEvent,
   type DiagnosisFocus,
   type DiagnosisResult,
@@ -139,7 +140,12 @@ export function DiagnosisWorkspace() {
         "Feedback saved as a proposed learning event. Review it before CareerOS uses it.",
       );
     } catch (error) {
-      setNotice(errorMessage(error));
+      setNotice(
+        error instanceof DiagnosisApiError &&
+          error.code === "DUPLICATE_FEEDBACK_EVENT"
+          ? "This looks similar to an existing feedback event."
+          : errorMessage(error),
+      );
     } finally {
       setTeaching(false);
     }
@@ -161,6 +167,32 @@ export function DiagnosisWorkspace() {
       );
     } catch (error) {
       setNotice(errorMessage(error));
+    }
+  }
+
+  async function editFeedbackEvent(
+    event: CareerFeedbackEvent,
+    rawNote: string,
+  ): Promise<boolean> {
+    const correctedNote = rawNote.trim();
+    if (!correctedNote) {
+      setNotice("A feedback event needs a note before it can be saved.");
+      return false;
+    }
+    try {
+      const updated = await updateFeedbackEvent(event.id, {
+        raw_note: correctedNote,
+      });
+      setFeedbackEvents((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setNotice(
+        "Feedback event corrected and reparsed. Its review status was preserved.",
+      );
+      return true;
+    } catch (error) {
+      setNotice(errorMessage(error));
+      return false;
     }
   }
 
@@ -284,6 +316,7 @@ export function DiagnosisWorkspace() {
           note={feedbackNote}
           onChangeNote={setFeedbackNote}
           onChangeStatus={changeFeedbackStatus}
+          onEdit={editFeedbackEvent}
           onTeach={teachCareerOS}
           teaching={teaching}
         />
@@ -354,6 +387,8 @@ function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
 
       <EvidenceMap result={result} />
 
+      <OutcomeSignals signals={result.outcome_signals} />
+
       <div className="grid gap-5 lg:grid-cols-2">
         <BriefPanel eyebrow="Recognition Gap" title="What is not being recognized yet">
           <p className="text-sm leading-7 text-[#5e7169]">{result.recognition_gap}</p>
@@ -397,6 +432,38 @@ function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
         <ExactMessages messages={result.exact_messages} />
       </div>
     </div>
+  );
+}
+
+function OutcomeSignals({ signals }: { signals: DiagnosisResult["outcome_signals"] }) {
+  if (!signals.length) return null;
+  return (
+    <section className="rounded-[28px] border border-[#d9d2ec] bg-[#f7f4fc] p-6 sm:p-7">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#76609b]">
+        Outcome signals · not canonical proof
+      </p>
+      <h2 className="mt-1 text-2xl font-semibold text-[#33284a]">
+        Approved results that can guide strategy
+      </h2>
+      <div className="mt-5 space-y-4">
+        {signals.map((signal) => (
+          <article
+            className="rounded-2xl border border-[#e2dcf0] bg-white/80 p-5"
+            key={signal.feedback_event_id}
+          >
+            <p className="text-sm font-semibold leading-6 text-[#4d4067]">
+              {signal.summary}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-[#665b7d]">
+              Future use: {signal.guidance}
+            </p>
+            <p className="mt-3 text-xs leading-5 text-[#817694]">
+              {signal.caveat}
+            </p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -563,6 +630,7 @@ function TeachCareerOSPanel({
   note,
   onChangeNote,
   onChangeStatus,
+  onEdit,
   onTeach,
   teaching,
 }: {
@@ -573,9 +641,29 @@ function TeachCareerOSPanel({
     event: CareerFeedbackEvent,
     status: FeedbackEventStatus,
   ) => Promise<void>;
+  onEdit: (event: CareerFeedbackEvent, rawNote: string) => Promise<boolean>;
   onTeach: () => Promise<void>;
   teaching: boolean;
 }) {
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editNote, setEditNote] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  function beginEdit(event: CareerFeedbackEvent) {
+    setEditingEventId(event.id);
+    setEditNote(event.raw_note);
+  }
+
+  async function saveEdit(event: CareerFeedbackEvent) {
+    setSavingEdit(true);
+    const saved = await onEdit(event, editNote);
+    setSavingEdit(false);
+    if (saved) {
+      setEditingEventId(null);
+      setEditNote("");
+    }
+  }
+
   return (
     <section className="mt-5 rounded-[28px] border border-[#dce4df] bg-white p-6 sm:p-8">
       <div className="grid gap-7 lg:grid-cols-[0.9fr_1.1fr]">
@@ -594,7 +682,7 @@ function TeachCareerOSPanel({
             aria-label="Teach CareerOS note"
             className="mt-5 min-h-36 w-full resize-y rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] p-4 text-sm leading-6 text-[#29483e] outline-none ring-[#dceee5] placeholder:text-[#96a39d] focus:ring-4"
             onChange={(event) => onChangeNote(event.target.value)}
-            placeholder="The Black Box AI Engineer Intern cover letter led to an interview invite."
+            placeholder="Example: This cover letter led to an interview invite."
             value={note}
           />
           <button
@@ -630,25 +718,93 @@ function TeachCareerOSPanel({
                 <p className="mt-3 text-sm leading-6 text-[#50665d]">
                   {event.structured_summary}
                 </p>
+                {event.artifact_label && (
+                  <p className="mt-2 text-xs font-semibold text-[#667970]">
+                    Artifact: {event.artifact_label}
+                    {event.outcome
+                      ? ` · Outcome: ${event.outcome.replaceAll("_", " ").toLowerCase()}`
+                      : ""}
+                  </p>
+                )}
                 <p className="mt-2 text-xs leading-5 text-[#7a8983]">
                   Future use: {event.suggested_future_use}
                 </p>
-                {event.status === "PROPOSED" && (
-                  <div className="mt-3 flex gap-2">
+                <p className="mt-2 text-xs font-semibold leading-5 text-[#64766f]">
+                  {event.status === "APPROVED"
+                    ? "Approved guidance can influence future diagnosis; artifact outcomes remain labeled signals, not proof."
+                    : event.status === "ARCHIVED"
+                      ? "Archived events are excluded from future diagnosis guidance."
+                      : "Proposed events wait for your review before guiding diagnosis."}
+                </p>
+                {editingEventId === event.id ? (
+                  <div className="mt-4 rounded-2xl border border-[#d8e2dc] bg-white p-3">
+                    <label className="text-xs font-bold text-[#48675a]">
+                      Correct feedback event
+                      <textarea
+                        aria-label="Edit feedback event note"
+                        className="mt-2 min-h-28 w-full resize-y rounded-xl border border-[#cfdbd4] bg-[#fbfcfa] p-3 text-sm font-normal leading-6 text-[#29483e] outline-none"
+                        onChange={(event) => setEditNote(event.target.value)}
+                        value={editNote}
+                      />
+                    </label>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                        disabled={savingEdit}
+                        onClick={() => void saveEdit(event)}
+                        type="button"
+                      >
+                        {savingEdit ? "Saving…" : "Save changes"}
+                      </button>
+                      <button
+                        className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                        disabled={savingEdit}
+                        onClick={() => {
+                          setEditingEventId(null);
+                          setEditNote("");
+                        }}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white"
-                      onClick={() => void onChangeStatus(event, "APPROVED")}
+                      className="rounded-full border border-[#c9d9d0] px-3 py-1.5 text-xs font-semibold text-[#456b59]"
+                      onClick={() => beginEdit(event)}
                       type="button"
                     >
-                      Approve guidance
+                      Edit event
                     </button>
-                    <button
-                      className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
-                      onClick={() => void onChangeStatus(event, "ARCHIVED")}
-                      type="button"
-                    >
-                      Archive
-                    </button>
+                    {event.status === "PROPOSED" && (
+                      <>
+                        <button
+                          className="rounded-full bg-[#285b4a] px-3 py-1.5 text-xs font-semibold text-white"
+                          onClick={() => void onChangeStatus(event, "APPROVED")}
+                          type="button"
+                        >
+                          Approve guidance
+                        </button>
+                        <button
+                          className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                          onClick={() => void onChangeStatus(event, "ARCHIVED")}
+                          type="button"
+                        >
+                          Archive
+                        </button>
+                      </>
+                    )}
+                    {event.status === "APPROVED" && (
+                      <button
+                        className="rounded-full border border-[#d8ddd9] px-3 py-1.5 text-xs font-semibold text-[#6d7c76]"
+                        onClick={() => void onChangeStatus(event, "ARCHIVED")}
+                        type="button"
+                      >
+                        Archive
+                      </button>
+                    )}
                   </div>
                 )}
               </article>

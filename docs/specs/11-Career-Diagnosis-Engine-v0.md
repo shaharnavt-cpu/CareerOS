@@ -13,6 +13,12 @@ feedback event IDs, and a `local-deterministic-v0` version. Feedback events stay
 separate from canonical memory and only approved events may guide diagnosis
 framing; they are never treated as factual proof.
 
+Sprint 11.1 strengthens feedback-memory quality: example capture text is a
+placeholder rather than prefilled input, feedback events can be corrected in
+place, and deterministic similarity detection prevents silent duplicates.
+Interview-invite and callback notes retain structured artifact labels and
+outcomes for later diagnosis use.
+
 ## Problem
 
 Overlooked students rarely need another generic resume rewrite. They need help
@@ -72,6 +78,8 @@ outcome analytics, autonomous coaching, or a universal career recommender.
   it is separate from model confidence.
 - **Teach CareerOS note**: a user-provided observation about framing, feedback,
   or an outcome that may inform future diagnosis.
+- **Outcome signal**: an approved, user-reported artifact outcome that may guide
+  strategy but is not canonical proof of skill and does not establish causality.
 
 ## Inputs
 
@@ -109,6 +117,9 @@ The v0 response should contain:
 8. **Confidence and evidence strength** — per major conclusion, with reasons
    and the evidence IDs or input notes used.
 
+9. **Approved outcome signals** — clearly separated from the Evidence Map,
+   with a future-use recommendation and a one-observation causality caveat.
+
 ## Data model / backend behavior
 
 The first implementation should be a provider-neutral diagnosis service with a
@@ -139,6 +150,13 @@ references, and timestamps—not hidden chain-of-thought. Historical application
 and submission records must remain immutable. A user feedback note is a new
 learning input; it must not rewrite the text that was submitted previously.
 
+Feedback notes use `PROPOSED`, `APPROVED`, and `ARCHIVED` review states. Editing
+the raw note reparses its structured summary, artifact type, artifact label, and
+outcome while preserving the current state unless the request explicitly changes
+it. Approved events may guide diagnosis as outcome signals. Archived events must
+not be read as diagnosis guidance. Creation should warn on likely duplicates
+instead of silently persisting them.
+
 The initial engine may combine deterministic rules, structured retrieval, and a
 replaceable reasoning provider. Every conclusion must carry its evidence
 references and a reason code such as strong direct proof, corroborated proof,
@@ -157,6 +175,11 @@ The first workspace should be a diagnosis brief, not a chat feed. It should:
 - provide copy/edit affordances for exact messages and actions;
 - offer a simple “Teach CareerOS” capture action after the user reports what
   happened.
+
+The capture input stays empty by default and shows examples only as placeholder
+text. Event cards provide edit controls and clear Proposed, Approved, and
+Archived labels. The workspace shows likely-duplicate warnings and renders
+approved outcomes separately from canonical proof.
 
 Empty states should say what input is missing, such as an approved memory or a
 target role. Low-confidence diagnoses should invite the user to add context

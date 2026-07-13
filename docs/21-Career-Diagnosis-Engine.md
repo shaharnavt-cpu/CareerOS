@@ -80,14 +80,25 @@ The deterministic parser classifies notes as:
 - `UNKNOWN`.
 
 Events begin as `PROPOSED` unless explicitly created otherwise. The user can
-approve them as guidance or archive them. Obvious approved-memory references
-are linked by ID, and optional application opportunity and draft links preserve
-future outcome context.
+edit the note (which reparses its structured fields without changing status),
+approve it as guidance, or archive it. Obvious approved-memory references are
+linked by ID, and optional application opportunity and draft links preserve
+future outcome context. Capture examples are placeholders only; CareerOS never
+prefills example text as though the user entered it.
 
 Teach CareerOS events remain user-reported learning inputs. Approval lets a
-future diagnosis use them for framing, but it does not convert them into
-canonical factual proof or rewrite a historical application. Artifact success
-summaries explicitly avoid claiming that one draft caused an outcome.
+future diagnosis use them for framing. Approved `ARTIFACT_SUCCESS` events appear
+separately as outcome signals and can guide the Recognition Gap, Proof Sprint,
+exact messages, and future-use recommendations. They do not become canonical
+factual proof, prove a skill, establish causality, or rewrite a historical
+application. Archived events never guide a diagnosis.
+
+The parser records artifact type, artifact label, and outcome for common notes
+such as cover letters that led to interview invites or resume versions that
+received callbacks. Creation also performs deterministic similarity checks over
+normalized note text, structured summaries, artifact/role keywords, and outcome
+language. A likely duplicate returns a warning and does not silently add another
+event; the existing event can be corrected with the edit control.
 
 ## Local deterministic behavior
 
@@ -127,6 +138,6 @@ Future work can link immutable application, outreach, interview, artifact, and
 project outcome events to the diagnosis and proof sprint that preceded them.
 Longitudinal analysis should compare strategies only after enough observations
 exist, preserve submission snapshots, distinguish correlation from causation,
-and let users correct or delete learning inputs. A graph-backed version can then
+and let users delete learning inputs. A graph-backed version can then
 connect Experience → Skills → Claims → Proof → Validators → Targets → Outcomes
 without weakening the approved-memory trust boundary.

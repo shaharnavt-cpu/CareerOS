@@ -85,6 +85,9 @@ class DiagnosisResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     feedback_event_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+    outcome_signals: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     diagnosis_version: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -120,6 +123,12 @@ class CareerFeedbackEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     raw_note: Mapped[str] = mapped_column(Text, nullable=False)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     structured_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_type: Mapped[str | None] = mapped_column(Text)
+    artifact_label: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     related_memory_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )

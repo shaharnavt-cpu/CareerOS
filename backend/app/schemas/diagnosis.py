@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -44,6 +45,21 @@ class FeedbackEventStatus(StrEnum):
     ARCHIVED = "ARCHIVED"
 
 
+class FeedbackArtifactType(StrEnum):
+    COVER_LETTER = "COVER_LETTER"
+    RESUME = "RESUME"
+    APPLICATION = "APPLICATION"
+    DRAFT = "DRAFT"
+    PROJECT = "PROJECT"
+    OTHER = "OTHER"
+
+
+class FeedbackOutcomeType(StrEnum):
+    INTERVIEW_INVITE = "INTERVIEW_INVITE"
+    CALLBACK = "CALLBACK"
+    OFFER = "OFFER"
+
+
 class DiagnosisSessionCreateRequest(BaseModel):
     target_role: str | None = Field(default=None, max_length=500)
     target_context: str | None = Field(default=None, max_length=5000)
@@ -80,6 +96,16 @@ class ProofSprint(BaseModel):
     application_use: str
 
 
+class OutcomeSignal(BaseModel):
+    feedback_event_id: uuid.UUID
+    artifact_type: FeedbackArtifactType | None
+    artifact_label: str | None
+    outcome: FeedbackOutcomeType | None
+    summary: str
+    guidance: str
+    caveat: str
+
+
 class DiagnosisResultView(BaseModel):
     id: uuid.UUID
     session_id: uuid.UUID
@@ -95,6 +121,7 @@ class DiagnosisResultView(BaseModel):
     confidence: float = Field(ge=0, le=1)
     evidence_ids: list[str]
     feedback_event_ids: list[str]
+    outcome_signals: list[OutcomeSignal]
     diagnosis_version: str
     created_at: datetime
     updated_at: datetime
@@ -133,13 +160,18 @@ class FeedbackEventUpdateRequest(BaseModel):
     raw_note: str | None = Field(default=None, min_length=1, max_length=10_000)
     event_type: FeedbackEventType | None = None
     structured_summary: str | None = Field(default=None, max_length=10_000)
+    artifact_type: FeedbackArtifactType | None = None
+    artifact_label: str | None = Field(default=None, max_length=1000)
+    outcome: FeedbackOutcomeType | None = None
     related_memory_ids: list[uuid.UUID] | None = None
     related_opportunity_id: uuid.UUID | None = None
     related_draft_id: uuid.UUID | None = None
     suggested_future_use: str | None = Field(default=None, max_length=10_000)
     status: FeedbackEventStatus | None = None
 
-    @field_validator("raw_note", "structured_summary", "suggested_future_use")
+    @field_validator(
+        "raw_note", "structured_summary", "artifact_label", "suggested_future_use"
+    )
     @classmethod
     def changed_text_has_content(cls, value: str | None) -> str | None:
         if value is None:
@@ -155,6 +187,10 @@ class FeedbackEventView(BaseModel):
     raw_note: str
     event_type: FeedbackEventType
     structured_summary: str
+    artifact_type: FeedbackArtifactType | None
+    artifact_label: str | None
+    outcome: FeedbackOutcomeType | None
+    event_metadata: dict[str, Any]
     related_memory_ids: list[str]
     related_opportunity_id: uuid.UUID | None
     related_draft_id: uuid.UUID | None

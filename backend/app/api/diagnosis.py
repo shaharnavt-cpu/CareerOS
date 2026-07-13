@@ -17,6 +17,7 @@ from app.services.career_diagnosis import (
     CareerDiagnosisService,
     CareerFeedbackService,
     DiagnosisNotFoundError,
+    DuplicateFeedbackEventError,
 )
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
@@ -106,6 +107,15 @@ def update_feedback_event(
 def _call(function, *args):
     try:
         return function(*args)
+    except DuplicateFeedbackEventError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "DUPLICATE_FEEDBACK_EVENT",
+                "message": str(exc),
+                "existing_event_id": str(exc.existing_event_id),
+            },
+        ) from exc
     except DiagnosisNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)

@@ -6,6 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -27,11 +28,14 @@ from app.schemas.diagnosis import (
     DiagnosisSessionStatus,
     DiagnosisSessionView,
     EvidenceMapItem,
+    FeedbackArtifactType,
     FeedbackEventCreateRequest,
     FeedbackEventStatus,
     FeedbackEventType,
     FeedbackEventUpdateRequest,
     FeedbackEventView,
+    FeedbackOutcomeType,
+    OutcomeSignal,
     ProofSprint,
 )
 from app.schemas.knowledge import DEMO_USER_ID, ReviewProposalType
@@ -41,12 +45,31 @@ class DiagnosisNotFoundError(LookupError):
     """Raised when a user-scoped diagnosis object is unavailable."""
 
 
+class DuplicateFeedbackEventError(ValueError):
+    """Raised when a feedback note is too similar to an existing event."""
+
+    def __init__(self, existing_event_id: uuid.UUID) -> None:
+        super().__init__("This looks similar to an existing feedback event.")
+        self.existing_event_id = existing_event_id
+
+
 @dataclass(frozen=True)
 class DiagnosisInputs:
     target_role: str | None
     target_context: str | None
     frustration_context: str | None
     selected_focus: DiagnosisFocus | None
+
+
+@dataclass(frozen=True)
+class ParsedFeedback:
+    event_type: FeedbackEventType
+    structured_summary: str
+    artifact_type: FeedbackArtifactType | None
+    artifact_label: str | None
+    outcome: FeedbackOutcomeType | None
+    suggested_future_use: str
+    metadata: dict[str, Any]
 
 
 class CareerDiagnosisService:
@@ -247,6 +270,7 @@ class CareerDiagnosisService:
                 confidence=Decimal(str(payload["confidence"])),
                 evidence_ids=payload["evidence_ids"],
                 feedback_event_ids=payload["feedback_event_ids"],
+                outcome_signals=payload["outcome_signals"],
                 diagnosis_version=self.version,
             )
         )
@@ -263,8 +287,13 @@ class CareerDiagnosisService:
         rationale = self._identity_rationale(
             memories, evidence_map, approved_feedback, inputs
         )
+        outcome_signals = self._outcome_signals(approved_feedback)
         recognition_gap = self._recognition_gap(
-            memories, theme_scores, approved_feedback, inputs
+            memories,
+            theme_scores,
+            approved_feedback,
+            outcome_signals,
+            inputs,
         )
         missing_proof = self._missing_proof(memories, theme_scores, inputs)
         proof_source = next(
@@ -282,7 +311,9 @@ class CareerDiagnosisService:
                 evidence_map[0],
             ),
         )
-        proof_sprint = self._proof_sprint(proof_source, theme_scores, inputs)
+        proof_sprint = self._proof_sprint(
+            proof_source, theme_scores, outcome_signals, inputs
+        )
         do_not_waste_time = self._do_not_waste_time(
             memories, theme_scores, proof_source, inputs
         )
@@ -294,7 +325,14 @@ class CareerDiagnosisService:
                 f"{self._target_label(inputs)} work and ask one specific question."
             ),
         ]
-        exact_messages = self._exact_messages(proof_source, inputs)
+        if outcome_signals:
+            artifact_label = outcome_signals[0].get("artifact_label") or "the artifact"
+            exact_actions.insert(
+                1,
+                f"Review {artifact_label} and preserve the role-specific framing "
+                "that received one positive outcome signal.",
+            )
+        exact_messages = self._exact_messages(proof_source, outcome_signals, inputs)
         evidence_ids = list(
             dict.fromkeys(
                 evidence_id
@@ -322,6 +360,7 @@ class CareerDiagnosisService:
             "confidence": round(confidence, 3),
             "evidence_ids": evidence_ids,
             "feedback_event_ids": [str(event.id) for event in approved_feedback],
+            "outcome_signals": outcome_signals,
         }
 
     def _empty_diagnosis(self) -> dict[str, Any]:
@@ -375,6 +414,7 @@ class CareerDiagnosisService:
             "confidence": 0.0,
             "evidence_ids": [],
             "feedback_event_ids": [],
+            "outcome_signals": [],
         }
 
     def _build_evidence_map(
@@ -498,11 +538,59 @@ class CareerDiagnosisService:
             )
         return rationale
 
+    @staticmethod
+    def _outcome_signals(
+        approved_feedback: list[CareerFeedbackEvent],
+    ) -> list[dict[str, Any]]:
+        signals: list[dict[str, Any]] = []
+        for event in approved_feedback:
+            if event.event_type != FeedbackEventType.ARTIFACT_SUCCESS.value:
+                continue
+            parsed = CareerFeedbackService.parse_note(event.raw_note)
+            artifact_type = (
+                FeedbackArtifactType(event.artifact_type)
+                if event.artifact_type
+                else parsed.artifact_type
+            )
+            artifact_label = event.artifact_label or parsed.artifact_label
+            outcome = (
+                FeedbackOutcomeType(event.outcome) if event.outcome else parsed.outcome
+            )
+            if outcome is None:
+                continue
+            label = artifact_label or "artifact"
+            outcome_phrase = {
+                FeedbackOutcomeType.INTERVIEW_INVITE: "led to an interview invite",
+                FeedbackOutcomeType.CALLBACK: "received a callback",
+                FeedbackOutcomeType.OFFER: "was associated with an offer",
+            }[outcome]
+            signals.append(
+                {
+                    "feedback_event_id": str(event.id),
+                    "artifact_type": artifact_type.value if artifact_type else None,
+                    "artifact_label": artifact_label,
+                    "outcome": outcome.value,
+                    "summary": (
+                        f"An approved outcome note says the {label} {outcome_phrase}. "
+                        "Treat this as a signal that this framing worked once, not "
+                        "proof that it caused the result."
+                    ),
+                    "guidance": event.suggested_future_use
+                    or parsed.suggested_future_use,
+                    "caveat": (
+                        "Outcome signals guide strategy but are not canonical proof "
+                        "of skill or causality."
+                    ),
+                }
+            )
+        return signals
+
     def _recognition_gap(
         self,
         memories: list[CanonicalMemoryRecord],
         scores: dict[str, int],
         approved_feedback: list[CareerFeedbackEvent],
+        outcome_signals: list[dict[str, Any]],
         inputs: DiagnosisInputs,
     ) -> str:
         combined = " ".join(self._memory_text(memory) for memory in memories)
@@ -567,6 +655,8 @@ class CareerDiagnosisService:
                 " Approved Teach CareerOS notes shape this strategy, but remain "
                 "user-reported learning inputs rather than canonical proof."
             )
+        if outcome_signals:
+            gap += f" {outcome_signals[0]['summary']}"
         return gap
 
     def _missing_proof(
@@ -621,6 +711,7 @@ class CareerDiagnosisService:
         self,
         strongest: dict[str, Any],
         scores: dict[str, int],
+        outcome_signals: list[dict[str, Any]],
         inputs: DiagnosisInputs,
     ) -> dict[str, Any]:
         title = strongest["memory_title"]
@@ -638,6 +729,24 @@ class CareerDiagnosisService:
             )
         else:
             artifact = f"A one-page target-facing proof brief for {title}."
+        day_five = (
+            "Day 5: ask one target-aware reviewer what they recognize in 30 seconds."
+        )
+        application_use = (
+            "Link or attach it in targeted applications, use its opening sentence "
+            "in outreach, and ask reviewers about the specific claim it demonstrates."
+        )
+        if outcome_signals:
+            outcome_label = outcome_signals[0].get("artifact_label") or "the artifact"
+            day_five = (
+                f"Day 5: compare the framing with {outcome_label}, which has one "
+                "user-reported positive outcome, then ask a target-aware reviewer "
+                "what they recognize in 30 seconds."
+            )
+            application_use += (
+                f" Reuse the role-specific clarity from {outcome_label} where it "
+                "fits; treat its outcome as a one-time signal, not a guarantee."
+            )
         return {
             "objective": f"Package {title} as recognizable proof for {target}.",
             "actions": [
@@ -646,8 +755,7 @@ class CareerDiagnosisService:
                 "support it.",
                 "Days 3-4: build the one-page artifact with problem, action, "
                 "evidence, and implication.",
-                "Day 5: ask one target-aware reviewer what they recognize in 30 "
-                "seconds.",
+                day_five,
                 "Days 6-7: revise once, publish or attach it, and send three targeted "
                 "messages.",
             ],
@@ -660,11 +768,7 @@ class CareerDiagnosisService:
                 str(strongest["memory_id"]),
                 *strongest["evidence_ids"],
             ],
-            "application_use": (
-                "Link or attach it in targeted applications, use its opening sentence "
-                "in outreach, and ask reviewers about the specific claim it "
-                "demonstrates."
-            ),
+            "application_use": application_use,
         }
 
     def _do_not_waste_time(
@@ -696,11 +800,22 @@ class CareerDiagnosisService:
         )
 
     def _exact_messages(
-        self, strongest: dict[str, Any], inputs: DiagnosisInputs
+        self,
+        strongest: dict[str, Any],
+        outcome_signals: list[dict[str, Any]],
+        inputs: DiagnosisInputs,
     ) -> dict[str, str]:
         target = self._target_label(inputs)
         title = strongest["memory_title"]
         themes = ", ".join(strongest["relevant_themes"][:3]).lower()
+        outcome_guidance = ""
+        if outcome_signals:
+            outcome_label = outcome_signals[0].get("artifact_label") or "the artifact"
+            outcome_guidance = (
+                f" Reuse the role-specific framing pattern from {outcome_label} "
+                "where relevant; its positive result is one outcome signal, not "
+                "proof of causality."
+            )
         return {
             "linkedin_outreach": (
                 f"Hi [Name] — I’m targeting {target} roles and am packaging {title} "
@@ -721,7 +836,7 @@ class CareerDiagnosisService:
                 "evidence "
                 f"of {themes}. I would frame the work around the problem, method, and "
                 "decision implication without claiming an outcome that is not "
-                "documented."
+                f"documented.{outcome_guidance}"
             ),
         }
 
@@ -764,6 +879,9 @@ class CareerDiagnosisService:
             confidence=float(result.confidence),
             evidence_ids=result.evidence_ids,
             feedback_event_ids=result.feedback_event_ids,
+            outcome_signals=[
+                OutcomeSignal(**signal) for signal in result.outcome_signals
+            ],
             diagnosis_version=result.diagnosis_version,
             created_at=result.created_at,
             updated_at=result.updated_at,
@@ -894,21 +1012,30 @@ class CareerFeedbackService:
         self, session: Session, request: FeedbackEventCreateRequest
     ) -> FeedbackEventView:
         self._ensure_user(session)
+        parsed = self.parse_note(request.raw_note)
+        duplicate = self._find_duplicate(session, request.raw_note, parsed)
+        if duplicate is not None:
+            raise DuplicateFeedbackEventError(duplicate.id)
         related_ids = self._validated_memory_ids(session, request.related_memory_ids)
         obvious_ids = self._obvious_memory_ids(session, request.raw_note)
         self._validate_application_links(
             session, request.related_opportunity_id, request.related_draft_id
         )
-        event_type = self._event_type(request.raw_note)
         record = CareerFeedbackEvent(
             user_id=self.user_id,
             raw_note=request.raw_note,
-            event_type=event_type.value,
-            structured_summary=self._summary(request.raw_note, event_type),
+            event_type=parsed.event_type.value,
+            structured_summary=parsed.structured_summary,
+            artifact_type=(
+                parsed.artifact_type.value if parsed.artifact_type else None
+            ),
+            artifact_label=parsed.artifact_label,
+            outcome=parsed.outcome.value if parsed.outcome else None,
+            event_metadata=parsed.metadata,
             related_memory_ids=list(dict.fromkeys([*related_ids, *obvious_ids])),
             related_opportunity_id=request.related_opportunity_id,
             related_draft_id=request.related_draft_id,
-            suggested_future_use=self._future_use(event_type),
+            suggested_future_use=parsed.suggested_future_use,
             status=request.status.value,
         )
         session.add(record)
@@ -932,10 +1059,16 @@ class CareerFeedbackService:
         record = self._get(session, feedback_event_id)
         if request.raw_note is not None:
             record.raw_note = request.raw_note
-            parsed_type = self._event_type(request.raw_note)
-            record.event_type = parsed_type.value
-            record.structured_summary = self._summary(request.raw_note, parsed_type)
-            record.suggested_future_use = self._future_use(parsed_type)
+            parsed = self.parse_note(request.raw_note)
+            record.event_type = parsed.event_type.value
+            record.structured_summary = parsed.structured_summary
+            record.artifact_type = (
+                parsed.artifact_type.value if parsed.artifact_type else None
+            )
+            record.artifact_label = parsed.artifact_label
+            record.outcome = parsed.outcome.value if parsed.outcome else None
+            record.event_metadata = parsed.metadata
+            record.suggested_future_use = parsed.suggested_future_use
             record.related_memory_ids = list(
                 dict.fromkeys(
                     [
@@ -948,6 +1081,14 @@ class CareerFeedbackService:
             record.event_type = request.event_type.value
         if request.structured_summary is not None:
             record.structured_summary = request.structured_summary
+        if "artifact_type" in request.model_fields_set:
+            record.artifact_type = (
+                request.artifact_type.value if request.artifact_type else None
+            )
+        if "artifact_label" in request.model_fields_set:
+            record.artifact_label = request.artifact_label
+        if "outcome" in request.model_fields_set:
+            record.outcome = request.outcome.value if request.outcome else None
         if request.related_memory_ids is not None:
             record.related_memory_ids = self._validated_memory_ids(
                 session, request.related_memory_ids
@@ -972,15 +1113,18 @@ class CareerFeedbackService:
         session.commit()
         return self._view(record)
 
-    @staticmethod
-    def _event_type(note: str) -> FeedbackEventType:
-        lowered = note.casefold()
+    @classmethod
+    def parse_note(cls, note: str) -> ParsedFeedback:
+        clean_note = " ".join(note.split())
+        lowered = clean_note.casefold()
+        artifact_type = cls._artifact_type(clean_note)
+        outcome = cls._outcome(clean_note)
         if any(
             phrase in lowered
             for phrase in ("do not use", "don't use", "never use", "avoid using")
         ):
-            return FeedbackEventType.MEMORY_USAGE_RULE
-        if any(
+            event_type = FeedbackEventType.MEMORY_USAGE_RULE
+        elif any(
             phrase in lowered
             for phrase in (
                 "use ",
@@ -992,41 +1136,130 @@ class CareerFeedbackService:
                 "not as",
             )
         ) and any(phrase in lowered for phrase in (" as ", " for ", "role", "story")):
-            return FeedbackEventType.POSITIONING_RULE
-        positive = any(
-            phrase in lowered
-            for phrase in (
-                "interview invite",
-                "got me an interview",
-                "led to an interview",
-                "offer",
-                "accepted",
-                "successful",
-            )
-        )
-        artifact = any(
-            phrase in lowered
-            for phrase in ("cover letter", "draft", "resume", "project", "case study")
-        )
-        if positive and artifact:
-            return FeedbackEventType.ARTIFACT_SUCCESS
-        if any(
+            event_type = FeedbackEventType.POSITIONING_RULE
+        elif outcome is not None and artifact_type is not None:
+            event_type = FeedbackEventType.ARTIFACT_SUCCESS
+        elif any(
             phrase in lowered
             for phrase in ("rejected", "rejection", "application outcome", "interview")
         ):
-            return FeedbackEventType.APPLICATION_OUTCOME
-        if "draft" in lowered or "generic" in lowered or "too long" in lowered:
-            return FeedbackEventType.DRAFT_FEEDBACK
-        if len(note.split()) >= 3:
-            return FeedbackEventType.GENERAL_LEARNING
-        return FeedbackEventType.UNKNOWN
+            event_type = FeedbackEventType.APPLICATION_OUTCOME
+        elif "draft" in lowered or "generic" in lowered or "too long" in lowered:
+            event_type = FeedbackEventType.DRAFT_FEEDBACK
+        elif len(clean_note.split()) >= 3:
+            event_type = FeedbackEventType.GENERAL_LEARNING
+        else:
+            event_type = FeedbackEventType.UNKNOWN
+
+        artifact_label = cls._artifact_label(clean_note, artifact_type)
+        structured_summary = cls._summary(
+            clean_note, event_type, artifact_label, outcome
+        )
+        suggested_future_use = cls._future_use(
+            event_type, artifact_type, artifact_label, outcome
+        )
+        return ParsedFeedback(
+            event_type=event_type,
+            structured_summary=structured_summary,
+            artifact_type=artifact_type,
+            artifact_label=artifact_label,
+            outcome=outcome,
+            suggested_future_use=suggested_future_use,
+            metadata={
+                "parser_version": "feedback-deterministic-v1",
+                "normalized_raw_note": cls._normalize(clean_note),
+                "artifact_keywords": cls._artifact_keywords(artifact_label),
+                "outcome_language": outcome.value if outcome else None,
+            },
+        )
 
     @staticmethod
-    def _summary(note: str, event_type: FeedbackEventType) -> str:
+    def _artifact_type(note: str) -> FeedbackArtifactType | None:
+        lowered = note.casefold()
+        if "cover letter" in lowered:
+            return FeedbackArtifactType.COVER_LETTER
+        if "resume" in lowered or "résumé" in lowered:
+            return FeedbackArtifactType.RESUME
+        if "application" in lowered:
+            return FeedbackArtifactType.APPLICATION
+        if "draft" in lowered:
+            return FeedbackArtifactType.DRAFT
+        if "project" in lowered or "case study" in lowered:
+            return FeedbackArtifactType.PROJECT
+        return None
+
+    @staticmethod
+    def _outcome(note: str) -> FeedbackOutcomeType | None:
+        lowered = note.casefold()
+        if "callback" in lowered or "called me back" in lowered:
+            return FeedbackOutcomeType.CALLBACK
+        if any(phrase in lowered for phrase in ("offer", "accepted", "hired")):
+            return FeedbackOutcomeType.OFFER
+        if any(
+            phrase in lowered
+            for phrase in (
+                "interview invite",
+                "interview invitation",
+                "invited to interview",
+                "got me an interview",
+                "led to an interview",
+                "resulted in an interview",
+            )
+        ):
+            return FeedbackOutcomeType.INTERVIEW_INVITE
+        return None
+
+    @staticmethod
+    def _artifact_label(
+        note: str, artifact_type: FeedbackArtifactType | None
+    ) -> str | None:
+        if artifact_type is None:
+            return None
+        suffix = {
+            FeedbackArtifactType.COVER_LETTER: r"cover letter",
+            FeedbackArtifactType.RESUME: r"resume(?: version)?|résumé(?: version)?",
+            FeedbackArtifactType.APPLICATION: r"application",
+            FeedbackArtifactType.DRAFT: r"draft",
+            FeedbackArtifactType.PROJECT: r"project|case study",
+            FeedbackArtifactType.OTHER: r"artifact",
+        }[artifact_type]
+        match = re.search(
+            rf"^(?:(?:the|this|my|a|an)\s+)?(.+?\b(?:{suffix}))\b",
+            note,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return {
+                FeedbackArtifactType.COVER_LETTER: "cover letter",
+                FeedbackArtifactType.RESUME: "resume",
+                FeedbackArtifactType.APPLICATION: "application",
+                FeedbackArtifactType.DRAFT: "draft",
+                FeedbackArtifactType.PROJECT: "project",
+                FeedbackArtifactType.OTHER: "artifact",
+            }[artifact_type]
+        return match.group(1).strip(" ,.;:-")
+
+    @staticmethod
+    def _summary(
+        note: str,
+        event_type: FeedbackEventType,
+        artifact_label: str | None,
+        outcome: FeedbackOutcomeType | None,
+    ) -> str:
+        if event_type == FeedbackEventType.ARTIFACT_SUCCESS and outcome is not None:
+            label = artifact_label or "artifact"
+            outcome_phrase = {
+                FeedbackOutcomeType.INTERVIEW_INVITE: "led to an interview invite",
+                FeedbackOutcomeType.CALLBACK: "received a callback",
+                FeedbackOutcomeType.OFFER: "was associated with an offer",
+            }[outcome]
+            return (
+                f"User reports that {label} {outcome_phrase}. "
+                "This is an association, not a proven cause."
+            )
         prefixes = {
             FeedbackEventType.ARTIFACT_SUCCESS: (
-                "User reports a positive artifact outcome; this is an association, "
-                "not a proven cause: "
+                "User reports a positive artifact outcome: "
             ),
             FeedbackEventType.APPLICATION_OUTCOME: (
                 "User-reported application outcome: "
@@ -1039,8 +1272,36 @@ class CareerFeedbackService:
         }
         return f"{prefixes[event_type]}{note.strip()}"
 
-    @staticmethod
-    def _future_use(event_type: FeedbackEventType) -> str:
+    @classmethod
+    def _future_use(
+        cls,
+        event_type: FeedbackEventType,
+        artifact_type: FeedbackArtifactType | None,
+        artifact_label: str | None,
+        outcome: FeedbackOutcomeType | None,
+    ) -> str:
+        if (
+            event_type == FeedbackEventType.ARTIFACT_SUCCESS
+            and artifact_type == FeedbackArtifactType.COVER_LETTER
+            and outcome == FeedbackOutcomeType.INTERVIEW_INVITE
+        ):
+            label_words = set(cls._artifact_keywords(artifact_label))
+            if label_words & {"jsom", "elearning", "recording", "studio", "assistant"}:
+                return (
+                    "Use this artifact and framing for similar campus, student-worker, "
+                    "technical communication, or department-specific roles; treat "
+                    "the result as a one-time signal."
+                )
+            return (
+                "Use this cover-letter framing for similar roles; treat the interview "
+                "invite as a one-time outcome signal, not proof of causality."
+            )
+        if event_type == FeedbackEventType.ARTIFACT_SUCCESS and artifact_type:
+            label = artifact_label or artifact_type.value.replace("_", " ").lower()
+            return (
+                f"Consider the framing from {label} for similar roles; treat the "
+                "result as a one-time outcome signal, not proof of causality."
+            )
         return {
             FeedbackEventType.ARTIFACT_SUCCESS: (
                 "Consider this artifact and framing in future drafts; do not infer "
@@ -1068,6 +1329,84 @@ class CareerFeedbackService:
                 "Review and classify this note before using it in a diagnosis."
             ),
         }[event_type]
+
+    def _find_duplicate(
+        self, session: Session, raw_note: str, parsed: ParsedFeedback
+    ) -> CareerFeedbackEvent | None:
+        normalized_note = self._normalize(raw_note)
+        parsed_label = self._normalize(parsed.artifact_label or "")
+        parsed_keywords = set(self._artifact_keywords(parsed.artifact_label))
+        records = session.scalars(
+            select(CareerFeedbackEvent).where(
+                CareerFeedbackEvent.user_id == self.user_id
+            )
+        ).all()
+        for record in records:
+            existing = self.parse_note(record.raw_note)
+            if existing.event_type != parsed.event_type:
+                continue
+            existing_note = self._normalize(record.raw_note)
+            if existing_note == normalized_note:
+                return record
+            if self._normalize(record.structured_summary) == self._normalize(
+                parsed.structured_summary
+            ):
+                return record
+            existing_artifact_type = record.artifact_type or (
+                existing.artifact_type.value if existing.artifact_type else None
+            )
+            existing_outcome = record.outcome or (
+                existing.outcome.value if existing.outcome else None
+            )
+            same_artifact_outcome = (
+                existing_artifact_type
+                == (parsed.artifact_type.value if parsed.artifact_type else None)
+                and existing_outcome
+                == (parsed.outcome.value if parsed.outcome else None)
+                and parsed.outcome is not None
+            )
+            if same_artifact_outcome:
+                existing_label = self._normalize(
+                    record.artifact_label or existing.artifact_label or ""
+                )
+                if existing_label and existing_label == parsed_label:
+                    return record
+                existing_keywords = set(
+                    self._artifact_keywords(
+                        record.artifact_label or existing.artifact_label
+                    )
+                )
+                shared = existing_keywords & parsed_keywords
+                combined = existing_keywords | parsed_keywords
+                if combined and len(shared) / len(combined) >= 0.6:
+                    return record
+            if SequenceMatcher(None, existing_note, normalized_note).ratio() >= 0.9:
+                return record
+        return None
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+    @staticmethod
+    def _artifact_keywords(value: str | None) -> list[str]:
+        ignored = {
+            "a",
+            "an",
+            "application",
+            "cover",
+            "letter",
+            "my",
+            "resume",
+            "the",
+            "this",
+            "version",
+        }
+        return [
+            word
+            for word in re.findall(r"[a-z0-9]+", (value or "").casefold())
+            if len(word) > 1 and word not in ignored
+        ]
 
     def _obvious_memory_ids(self, session: Session, note: str) -> list[str]:
         note_words = set(self._significant_words(note))
@@ -1135,6 +1474,14 @@ class CareerFeedbackService:
             raw_note=record.raw_note,
             event_type=FeedbackEventType(record.event_type),
             structured_summary=record.structured_summary,
+            artifact_type=(
+                FeedbackArtifactType(record.artifact_type)
+                if record.artifact_type
+                else None
+            ),
+            artifact_label=record.artifact_label,
+            outcome=(FeedbackOutcomeType(record.outcome) if record.outcome else None),
+            event_metadata=record.event_metadata,
             related_memory_ids=record.related_memory_ids,
             related_opportunity_id=record.related_opportunity_id,
             related_draft_id=record.related_draft_id,

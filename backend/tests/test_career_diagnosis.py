@@ -24,13 +24,16 @@ from app.models import (
 from app.schemas.diagnosis import (
     DiagnosisFocus,
     DiagnosisSessionCreateRequest,
+    FeedbackArtifactType,
     FeedbackEventCreateRequest,
     FeedbackEventStatus,
     FeedbackEventUpdateRequest,
+    FeedbackOutcomeType,
 )
 from app.services.career_diagnosis import (
     CareerDiagnosisService,
     CareerFeedbackService,
+    DuplicateFeedbackEventError,
 )
 
 
@@ -259,7 +262,8 @@ def test_teach_careeros_parses_success_and_positioning_rules() -> None:
                 session,
                 FeedbackEventCreateRequest(
                     raw_note=(
-                        "The Black Box AI Engineer Intern cover letter led to an "
+                        "The JSOM eLearning Recording Studio Assistant cover letter "
+                        "led to an "
                         "interview invite."
                     )
                 ),
@@ -275,10 +279,220 @@ def test_teach_careeros_parses_success_and_positioning_rules() -> None:
             )
 
         assert success.event_type.value == "ARTIFACT_SUCCESS"
+        assert success.artifact_type == FeedbackArtifactType.COVER_LETTER
+        assert success.artifact_label == (
+            "JSOM eLearning Recording Studio Assistant cover letter"
+        )
+        assert success.outcome == FeedbackOutcomeType.INTERVIEW_INVITE
         assert "not a proven cause" in success.structured_summary
+        assert "campus" in success.suggested_future_use
+        assert "student-worker" in success.suggested_future_use
+        assert "technical communication" in success.suggested_future_use
+        assert "department-specific" in success.suggested_future_use
         assert positioning.event_type.value == "POSITIONING_RULE"
         assert str(memories["project"].id) in positioning.related_memory_ids
         assert "approved memory" in positioning.suggested_future_use.lower()
+    finally:
+        _cleanup_user(user_id)
+
+
+@pytest.mark.parametrize(
+    ("note", "artifact_type", "outcome"),
+    [
+        (
+            "This cover letter got me an interview.",
+            FeedbackArtifactType.COVER_LETTER,
+            FeedbackOutcomeType.INTERVIEW_INVITE,
+        ),
+        (
+            "This application led to an interview invite.",
+            FeedbackArtifactType.APPLICATION,
+            FeedbackOutcomeType.INTERVIEW_INVITE,
+        ),
+        (
+            "This resume version got a callback.",
+            FeedbackArtifactType.RESUME,
+            FeedbackOutcomeType.CALLBACK,
+        ),
+    ],
+)
+def test_teach_careeros_parses_common_interview_outcomes(
+    note: str,
+    artifact_type: FeedbackArtifactType,
+    outcome: FeedbackOutcomeType,
+) -> None:
+    parsed = CareerFeedbackService.parse_note(note)
+
+    assert parsed.event_type.value == "ARTIFACT_SUCCESS"
+    assert parsed.artifact_type == artifact_type
+    assert parsed.outcome == outcome
+    assert parsed.artifact_label
+
+
+def test_duplicate_feedback_event_is_rejected_without_creating_a_second_row() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    _seed_memory(user_id)
+    service = CareerFeedbackService(user_id=user_id)
+    try:
+        with SessionLocal() as session:
+            existing = service.create(
+                session,
+                FeedbackEventCreateRequest(
+                    raw_note=(
+                        "The JSOM eLearning Recording Studio Assistant cover letter "
+                        "led to an interview invite."
+                    )
+                ),
+            )
+            with pytest.raises(DuplicateFeedbackEventError) as error:
+                service.create(
+                    session,
+                    FeedbackEventCreateRequest(
+                        raw_note=(
+                            "JSOM eLearning Recording Studio Assistant cover letter "
+                            "got me an interview."
+                        )
+                    ),
+                )
+            persisted = session.scalars(
+                select(CareerFeedbackEvent).where(
+                    CareerFeedbackEvent.user_id == user_id
+                )
+            ).all()
+
+        assert error.value.existing_event_id == existing.id
+        assert len(persisted) == 1
+    finally:
+        _cleanup_user(user_id)
+
+
+def test_duplicate_feedback_api_returns_actionable_warning() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    service = CareerFeedbackService(user_id=user_id)
+    app.dependency_overrides[get_feedback_service] = lambda: service
+    client = TestClient(app)
+    note = "This cover letter got me an interview."
+    try:
+        first = client.post("/api/diagnosis/feedback-events", json={"raw_note": note})
+        duplicate = client.post(
+            "/api/diagnosis/feedback-events", json={"raw_note": note}
+        )
+
+        assert first.status_code == 201
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == {
+            "code": "DUPLICATE_FEEDBACK_EVENT",
+            "message": "This looks similar to an existing feedback event.",
+            "existing_event_id": first.json()["id"],
+        }
+    finally:
+        app.dependency_overrides.pop(get_feedback_service, None)
+        _cleanup_user(user_id)
+
+
+def test_editing_feedback_raw_note_reparses_fields_and_preserves_status() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    _seed_memory(user_id)
+    service = CareerFeedbackService(user_id=user_id)
+    app.dependency_overrides[get_feedback_service] = lambda: service
+    client = TestClient(app)
+    try:
+        created = client.post(
+            "/api/diagnosis/feedback-events",
+            json={
+                "raw_note": (
+                    "The Black Box AI Engineer Intern cover letter led to an "
+                    "interview invite."
+                ),
+                "status": "APPROVED",
+            },
+        )
+        corrected = client.patch(
+            f"/api/diagnosis/feedback-events/{created.json()['id']}",
+            json={
+                "raw_note": (
+                    "The JSOM eLearning Recording Studio Assistant cover letter "
+                    "led to an interview invite."
+                )
+            },
+        )
+        payload = corrected.json()
+
+        assert created.status_code == 201
+        assert corrected.status_code == 200
+        assert payload["status"] == "APPROVED"
+        assert payload["artifact_type"] == "COVER_LETTER"
+        assert payload["artifact_label"] == (
+            "JSOM eLearning Recording Studio Assistant cover letter"
+        )
+        assert payload["outcome"] == "INTERVIEW_INVITE"
+        assert "JSOM eLearning" in payload["structured_summary"]
+        assert payload["event_metadata"]["parser_version"] == (
+            "feedback-deterministic-v1"
+        )
+    finally:
+        app.dependency_overrides.pop(get_feedback_service, None)
+        _cleanup_user(user_id)
+
+
+def test_approved_outcome_guides_diagnosis_and_archived_outcome_is_excluded() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    _seed_memory(user_id)
+    feedback_service = CareerFeedbackService(user_id=user_id)
+    diagnosis_service = CareerDiagnosisService(user_id=user_id)
+    try:
+        with SessionLocal() as session:
+            approved = feedback_service.create(
+                session,
+                FeedbackEventCreateRequest(
+                    raw_note=(
+                        "The JSOM eLearning Recording Studio Assistant cover letter "
+                        "led to an interview invite."
+                    ),
+                    status=FeedbackEventStatus.APPROVED,
+                ),
+            )
+            archived = feedback_service.create(
+                session,
+                FeedbackEventCreateRequest(
+                    raw_note=(
+                        "The Black Box AI Engineer Intern cover letter led to an "
+                        "interview invite."
+                    ),
+                    status=FeedbackEventStatus.ARCHIVED,
+                ),
+            )
+            diagnosis = diagnosis_service.create_and_run(
+                session,
+                DiagnosisSessionCreateRequest(
+                    target_role="Campus technical communications assistant",
+                    selected_focus=DiagnosisFocus.CAMPUS_JOB,
+                ),
+            )
+
+        assert diagnosis.result.feedback_event_ids == [str(approved.id)]
+        assert str(archived.id) not in diagnosis.result.feedback_event_ids
+        assert len(diagnosis.result.outcome_signals) == 1
+        signal = diagnosis.result.outcome_signals[0]
+        assert signal.feedback_event_id == approved.id
+        assert "JSOM eLearning Recording Studio Assistant" in signal.summary
+        assert "worked once" in signal.summary
+        assert "not proof" in signal.summary
+        diagnosis_guidance = " ".join(
+            [
+                diagnosis.result.recognition_gap,
+                *diagnosis.result.proof_sprint.actions,
+                diagnosis.result.proof_sprint.application_use,
+                *diagnosis.result.exact_next_actions,
+                *diagnosis.result.exact_messages.values(),
+            ]
+        )
+        assert "JSOM eLearning Recording Studio Assistant" in diagnosis_guidance
+        assert "Black Box AI Engineer Intern" not in diagnosis_guidance
     finally:
         _cleanup_user(user_id)
 
