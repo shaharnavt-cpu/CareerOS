@@ -64,7 +64,13 @@ test("proof artifact route and workspace expose the complete v0 flow", () => {
   assert.match(workspace, /Approve career memories before building a proof artifact/);
   assert.match(workspace, /Generate proof artifact/);
   assert.match(workspace, /One-page artifact preview/);
+  assert.match(workspace, /Viewing saved artifact/);
+  assert.match(workspace, /Built from\s+approved memory/);
+  assert.match(workspace, /From \{artifact\.source_memory_title\}/);
+  assert.match(workspace, /Source project:/);
+  assert.doesNotMatch(workspace, /Evidence ID:/);
   assert.match(workspace, /Evidence used/);
+  assert.match(workspace, /Approved source excerpt/);
   assert.match(workspace, /What not to claim/);
   assert.match(workspace, /Readiness assessment/);
   assert.match(workspace, /Outcome signals · not canonical proof/);
@@ -96,6 +102,9 @@ test("print route offers a clean browser PDF path", () => {
   assert.match(route, /ProofArtifactPrintView/);
   assert.match(view, /Print or save as PDF/);
   assert.match(view, /window\.print\(\)/);
+  assert.match(view, /Source project:/);
+  assert.doesNotMatch(view, /Built from approved Career Memory/);
+  assert.doesNotMatch(view, /Evidence ID:/);
   assert.match(styles, /@media print/);
   assert.match(styles, /@page/);
   assert.match(styles, /proof-print-actions/);

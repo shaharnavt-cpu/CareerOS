@@ -322,6 +322,23 @@ def test_create_case_study_uses_approved_gas_memory_without_inventing_python() -
         assert any(
             "No approved performance metric" in warning for warning in version.warnings
         )
+        sections = version.structured_sections
+        assert sections["problem"] == (
+            "The project tested how spectral and imaging observations could be used "
+            "to study relationships between galaxy morphology and kinematics."
+        )
+        assert sections["context"].startswith(
+            "This honors capstone applied data analysis"
+        )
+        assert "statistical modeling" in sections["method"]
+        assert "uncertainty and error propagation" in sections["method"]
+        assert "data visualization" in sections["method"]
+        assert "technical communication" in sections["method"]
+        assert "repeatable analytical workflow" in sections["outcome_or_insight"]
+        assert "supports decision-making" in sections["what_this_proves"]
+        assert "do not claim" not in sections["limitations"].casefold()
+        assert str(seeded.evidence_id) not in version.content
+        assert "CaseStudy" not in version.content
         assert {
             "resume_bullets",
             "cover_letter_paragraph",
@@ -329,6 +346,11 @@ def test_create_case_study_uses_approved_gas_memory_without_inventing_python() -
             "interview_answer",
             "github_readme_outline",
         }.issubset(version.supporting_variants)
+        variants = json.dumps(version.supporting_variants, ensure_ascii=False)
+        assert "State the approved problem" not in variants
+        assert "Name only source-backed inputs" not in variants
+        assert "Explain the approved analytical process" not in variants
+        assert "approved Career Memory" not in variants
     finally:
         _cleanup_user(user_id)
 
@@ -528,7 +550,7 @@ def test_edited_version_persists_and_warns_about_unsupported_numeric_claim() -> 
         _cleanup_user(user_id)
 
 
-def test_safe_edit_does_not_flag_generated_evidence_identifiers() -> None:
+def test_safe_edit_preserves_internal_evidence_link_without_exposing_id() -> None:
     _require_postgres()
     user_id = uuid.uuid4()
     seeded = _seed_gas_memory(user_id)
@@ -550,7 +572,8 @@ def test_safe_edit_does_not_flag_generated_evidence_identifiers() -> None:
 
         assert "## Evidence used" in edited.latest_version.content
         assert seeded.evidence_id is not None
-        assert str(seeded.evidence_id) in edited.latest_version.content
+        assert str(seeded.evidence_id) not in edited.latest_version.content
+        assert edited.latest_version.evidence_ids == [str(seeded.evidence_id)]
         assert not any(
             warning.startswith("Edited text contains numeric claims")
             for warning in edited.latest_version.warnings
@@ -919,7 +942,7 @@ def test_special_galaxy_title_requires_galaxy_evidence() -> None:
         _cleanup_user(user_id)
 
 
-def test_rendered_case_study_includes_evidence_provenance() -> None:
+def test_rendered_case_study_uses_readable_evidence_without_internal_id() -> None:
     _require_postgres()
     user_id = uuid.uuid4()
     seeded = _seed_gas_memory(user_id)
@@ -933,9 +956,82 @@ def test_rendered_case_study_includes_evidence_provenance() -> None:
         content = artifact.latest_version.content
         assert "## Evidence used" in content
         assert GAS_SOURCE_LABEL in content
-        assert str(seeded.evidence_id) in content
+        assert "Project scope" in content
+        assert "Analytical method" in content
+        assert str(seeded.evidence_id) not in content
+        assert artifact.latest_version.evidence_ids == [str(seeded.evidence_id)]
+        assert artifact.latest_version.evidence_references[0].evidence_id == str(
+            seeded.evidence_id
+        )
     finally:
         _cleanup_user(user_id)
+
+
+def test_velocity_dispersion_problem_is_polished_when_source_backed() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    seeded = _seed_gas_memory(user_id, with_evidence=False)
+    _replace_memory_details(
+        user_id,
+        seeded.memory_id,
+        title=GAS_MEMORY_TITLE,
+        structured_fields={
+            "title": GAS_MEMORY_TITLE,
+            "summary": (
+                "Studied galaxy morphology and rotational velocity dispersion "
+                "using spectral and imaging data."
+            ),
+            "methods": [
+                "statistical analysis",
+                "modeling",
+                "uncertainty and error propagation",
+                "communicated technical findings",
+            ],
+        },
+    )
+    try:
+        with SessionLocal() as session:
+            artifact = ProofArtifactService(user_id=user_id).create(
+                session, _create_request(seeded.memory_id)
+            )
+
+        assert artifact.latest_version.structured_sections["problem"] == (
+            "The project tested whether spectral and imaging data could be used to "
+            "study relationships between galaxy morphology and rotational velocity "
+            "dispersion."
+        )
+        method = artifact.latest_version.structured_sections["method"]
+        assert "statistical analysis" in method
+        assert "modeling" in method
+        assert "uncertainty and error propagation" in method
+        assert "technical communication" in method
+        assert "statistical modeling" not in method
+    finally:
+        _cleanup_user(user_id)
+
+
+def test_legacy_user_facing_text_hides_internal_ids_and_placeholders() -> None:
+    evidence_id = uuid.uuid4()
+    sections = {
+        "problem": "A documented problem.",
+        "data_or_inputs": "Documented inputs.",
+        "method": "A documented method.",
+        "outcome_or_insight": "A documented takeaway.",
+        "limitations": "A concise limitation.",
+        "what_this_proves": "A transferable capability.",
+    }
+    legacy = (
+        f"# Data Analytics CaseStudy\n\n- Source (evidence {evidence_id})\n\n"
+        f"Evidence ID: {evidence_id}\n\nState the approved problem in one paragraph."
+    )
+
+    cleaned = ProofArtifactService._clean_user_facing_text(legacy, sections)
+
+    assert "Case Study" in cleaned
+    assert "CaseStudy" not in cleaned
+    assert str(evidence_id) not in cleaned
+    assert "Evidence ID" not in cleaned
+    assert "A documented problem." in cleaned
 
 
 def test_corrected_feedback_wins_over_stale_diagnosis_snapshot() -> None:

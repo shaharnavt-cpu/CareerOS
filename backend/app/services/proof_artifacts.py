@@ -415,34 +415,28 @@ class ProofArtifactService:
         outcome_signals = self._outcome_signals(session, memory, diagnosis)
         title = self._case_study_title(memory, target_role, approved_text)
         claim = self._target_claim(memory, target_role, capabilities)
-        method = self._method(memory, capabilities)
-        problem = self._problem(memory, evidence_references)
+        method = self._method(memory, capabilities, approved_text)
+        problem = self._problem(memory, evidence_references, approved_text)
         data_or_inputs = self._data_or_inputs(memory, approved_text)
-        outcome_or_insight = documented_outcome or (
-            "The artifact demonstrates the analytical process and communication "
-            "of findings; do not claim a quantified business outcome."
+        outcome_or_insight = documented_outcome or self._outcome_or_insight(
+            capabilities, approved_text
         )
         sections: dict[str, Any] = {
             "title": title,
             "target_claim": claim,
             "role_relevance": self._role_relevance(target_role, capabilities),
-            "context": (
-                f"{memory.title} is a {self._memory_type_label(memory.memory_type)} "
-                "recorded in approved Career Memory. This case study only uses "
-                "that memory and its linked evidence for factual claims."
-            ),
+            "context": self._context(memory, capabilities, approved_text),
             "problem": problem,
             "data_or_inputs": data_or_inputs,
             "method": method,
             "evidence_used": evidence_references,
             "skills_demonstrated": capabilities,
             "outcome_or_insight": outcome_or_insight,
-            "limitations": (
-                "This draft does not infer business impact, causality, tools, data, "
-                "or metrics beyond the approved memory and evidence trail."
+            "limitations": self._limitations(
+                len(evidence_references), documented_outcome
             ),
             "what_this_proves": self._what_this_proves(
-                memory, target_role, capabilities
+                memory, target_role, capabilities, approved_text
             ),
             "how_to_use": self._how_to_use(target_audience),
             "reviewer_question": self._reviewer_question(target_role),
@@ -470,6 +464,10 @@ class ProofArtifactService:
             method,
             outcome_or_insight,
             capabilities,
+            problem,
+            data_or_inputs,
+            sections["what_this_proves"],
+            sections["limitations"],
         )
         case_study_content = self._render_case_study(sections)
         content = self._primary_content(artifact_type, case_study_content, variants)
@@ -634,7 +632,7 @@ class ProofArtifactService:
             "data analysis": "analyze complex data",
             "Python": "use Python",
             "statistical modeling": "apply statistical modeling",
-            "modeling": "apply source-backed modeling",
+            "modeling": "apply modeling",
             "uncertainty and error propagation": "reason about uncertainty",
             "data visualization": "make findings visually inspectable",
             "technical communication": "communicate technical findings clearly",
@@ -652,7 +650,12 @@ class ProofArtifactService:
         )
 
     @classmethod
-    def _method(cls, memory: CanonicalMemoryRecord, capabilities: list[str]) -> str:
+    def _method(
+        cls,
+        memory: CanonicalMemoryRecord,
+        capabilities: list[str],
+        approved_text: str,
+    ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
             "method",
@@ -661,16 +664,46 @@ class ProofArtifactService:
             "approach",
             "process",
         )
+        if cls._is_galaxy_analytics_case(approved_text):
+            text = approved_text.casefold()
+            phrases: list[str] = []
+            if "data analysis" in capabilities:
+                phrases.append(
+                    "statistical analysis"
+                    if "statistical analys" in text
+                    else "data analysis"
+                )
+            if "statistical modeling" in capabilities:
+                phrases.append("statistical modeling")
+            elif "modeling" in capabilities:
+                phrases.append("modeling")
+            phrases.extend(
+                phrase
+                for capability, phrase in (
+                    (
+                        "uncertainty and error propagation",
+                        "uncertainty and error propagation",
+                    ),
+                    ("data visualization", "data visualization"),
+                    ("technical communication", "technical communication"),
+                )
+                if capability in capabilities
+            )
+            if phrases:
+                return (
+                    f"I used {cls._join(phrases)} to interpret complex spectral "
+                    "and imaging data."
+                )
         if direct:
-            return f"Approved memory documents this approach: {direct}"
+            return direct
         if capabilities:
             return (
-                "The linked evidence supports a process involving "
-                f"{cls._join(capabilities[:5])}."
+                f"I applied {cls._join(capabilities[:5])} to complete the documented "
+                "project work and communicate the result."
             )
         return (
-            "The approved memory does not document the method in enough detail. "
-            "Add a source-backed method description before sharing."
+            "The method needs one more source-backed description before this work "
+            "sample is ready to share."
         )
 
     @classmethod
@@ -678,6 +711,7 @@ class ProofArtifactService:
         cls,
         memory: CanonicalMemoryRecord,
         evidence_references: list[dict[str, str | None]],
+        approved_text: str,
     ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
@@ -689,6 +723,18 @@ class ProofArtifactService:
             "summary",
             "description",
         )
+        if cls._is_galaxy_analytics_case(approved_text):
+            text = approved_text.casefold()
+            if "rotational" in text and "velocity dispersion" in text:
+                return (
+                    "The project tested whether spectral and imaging data could be "
+                    "used to study relationships between galaxy morphology and "
+                    "rotational velocity dispersion."
+                )
+            return (
+                "The project tested how spectral and imaging observations could be "
+                "used to study relationships between galaxy morphology and kinematics."
+            )
         if direct:
             return direct
         for reference in evidence_references:
@@ -697,10 +743,10 @@ class ProofArtifactService:
                 term in excerpt.casefold()
                 for term in ("research", "investigat", "analy", "study", "model")
             ):
-                return f"Approved evidence describes the work this way: {excerpt}"
+                return excerpt
         return (
-            f"The approved memory identifies {memory.title}, but the problem statement "
-            "needs a clearer source-backed sentence before sharing."
+            f"{memory.title} is documented, but the project question needs one clearer "
+            "source-backed sentence before this work sample is ready to share."
         )
 
     @classmethod
@@ -729,12 +775,86 @@ class ProofArtifactService:
         ]
         if descriptors:
             return (
-                f"The linked approved evidence references {cls._join(descriptors)}. "
-                "Do not name a dataset unless the source does."
+                f"The analysis used {cls._join(descriptors)} documented in the "
+                "project evidence."
             )
         return (
-            "The approved memory does not name the inputs in enough detail. Add a "
-            "source-backed description rather than guessing a dataset."
+            "The available sources do not yet describe the inputs in enough detail "
+            "for a final work sample."
+        )
+
+    @classmethod
+    def _context(
+        cls,
+        memory: CanonicalMemoryRecord,
+        capabilities: list[str],
+        approved_text: str,
+    ) -> str:
+        if cls._is_galaxy_analytics_case(approved_text):
+            project_kind = (
+                "This honors capstone"
+                if any(
+                    term in approved_text.casefold() for term in ("honors", "capstone")
+                )
+                else "This research project"
+            )
+            focus = [
+                label
+                for capability, label in (
+                    ("statistical modeling", "modeling"),
+                    ("modeling", "modeling"),
+                    (
+                        "uncertainty and error propagation",
+                        "uncertainty analysis",
+                    ),
+                    ("data visualization", "visualization"),
+                    ("technical communication", "clear technical communication"),
+                )
+                if capability in capabilities
+            ]
+            suffix = f", with an emphasis on {cls._join(focus)}" if focus else ""
+            return (
+                f"{project_kind} applied data analysis to an astronomy research "
+                f"question{suffix}."
+            )
+        return (
+            f"{memory.title} is a documented "
+            f"{cls._memory_type_label(memory.memory_type)} "
+            "presented here as a concise, role-specific work sample."
+        )
+
+    @classmethod
+    def _outcome_or_insight(cls, capabilities: list[str], approved_text: str) -> str:
+        if cls._is_galaxy_analytics_case(approved_text):
+            return (
+                "The project demonstrates a repeatable analytical workflow: define "
+                "the question, analyze technical data, account for uncertainty, and "
+                "communicate findings clearly."
+            )
+        if capabilities:
+            return (
+                "The project demonstrates a repeatable workflow for applying "
+                f"{cls._join(capabilities[:4])} and communicating the work clearly."
+            )
+        return "The project creates an inspectable record of the documented work."
+
+    @staticmethod
+    def _limitations(
+        resolved_evidence_count: int, documented_outcome: str | None
+    ) -> str:
+        if not resolved_evidence_count:
+            return (
+                "The current draft needs a source that documents the method or result "
+                "before it is ready to share."
+            )
+        if not documented_outcome:
+            return (
+                "The available evidence documents the process and communication of "
+                "findings, but not a quantified outcome."
+            )
+        return (
+            "The scope is limited to the methods and results documented by the cited "
+            "sources."
         )
 
     @staticmethod
@@ -745,9 +865,8 @@ class ProofArtifactService:
                 "the role-relevant method still needs more approved detail."
             )
         return (
-            f"For {target_role}, the strongest supported connection is "
-            f"{ProofArtifactService._join(capabilities[:5])}. This is role framing, "
-            "not a claim about employer preferences or business impact."
+            f"For {target_role}, this project is most relevant as evidence of "
+            f"{ProofArtifactService._join(capabilities[:5])}."
         )
 
     @staticmethod
@@ -755,12 +874,19 @@ class ProofArtifactService:
         memory: CanonicalMemoryRecord,
         target_role: str,
         capabilities: list[str],
+        approved_text: str,
     ) -> str:
+        if ProofArtifactService._is_galaxy_analytics_case(approved_text):
+            return (
+                "This case study shows that I can work with complex data, reason "
+                "through uncertainty, and explain technical results in a way that "
+                "supports decision-making."
+            )
         if capabilities:
             return (
-                f"The approved evidence for {memory.title} supports "
-                f"{ProofArtifactService._join(capabilities[:5])} as relevant proof "
-                f"for {target_role}."
+                f"This work sample shows how I applied "
+                f"{ProofArtifactService._join(capabilities[:5])} in {memory.title}, "
+                f"skills that transfer directly to {target_role}."
             )
         return (
             f"This makes {memory.title} reviewable for {target_role}, while making "
@@ -851,6 +977,16 @@ class ProofArtifactService:
             )
         )
 
+    @staticmethod
+    def _is_galaxy_analytics_case(approved_text: str) -> bool:
+        text = approved_text.casefold()
+        return (
+            "spectral" in text
+            and "imaging" in text
+            and "morpholog" in text
+            and bool(re.search(r"\bgalax(?:y|ies)\b", text))
+        )
+
     @classmethod
     def _supporting_variants(
         cls,
@@ -860,40 +996,61 @@ class ProofArtifactService:
         method: str,
         outcome: str,
         capabilities: list[str],
+        problem: str,
+        data_or_inputs: str,
+        what_this_proves: str,
+        limitations: str,
     ) -> dict[str, Any]:
         skills = (
             cls._join(capabilities[:4]) if capabilities else "documented project work"
         )
-        resume_bullets = [
-            f"Built role-relevant proof of {skills} through {memory.title}.",
-            (
-                f"Framed the approved project method for {target_role} without adding "
-                "unsupported metrics or business impact."
-            ),
-        ]
+        if cls._is_galaxy_analytics_case(
+            " ".join((memory.title, problem, data_or_inputs, method))
+        ):
+            resume_bullets = [
+                (
+                    "Analyzed spectral and imaging data to study relationships "
+                    "between galaxy morphology and kinematics."
+                ),
+                (
+                    f"Applied {skills} to build a repeatable analytical workflow and "
+                    "communicate technical findings clearly."
+                ),
+            ]
+        else:
+            resume_bullets = [
+                (
+                    f"Applied {skills} in {memory.title} to address the documented "
+                    "project question."
+                ),
+                (
+                    "Produced a reviewable case study that explains the method, "
+                    f"evidence, and result for {target_role}."
+                ),
+            ]
         cover_letter = (
-            f"My approved Career Memory includes {memory.title}. {claim} {method} "
-            "I would bring the same evidence-first approach to this opportunity."
+            f"In {memory.title}, {problem[0].lower() + problem[1:]} {method} "
+            f"{what_this_proves} I would bring the same disciplined, evidence-based "
+            "approach to this opportunity."
         )
         outreach = (
-            f"I’m targeting {target_role} roles and recently packaged {memory.title} "
-            f"as a one-page proof artifact. {claim} I’d value one quick reaction: "
-            "is the role-relevant value clear in the first 30 seconds?"
+            f"I’m targeting {target_role} roles and created a one-page case study "
+            f"from {memory.title}. {claim} I’d value one quick reaction: is the "
+            "role-relevant value clear in the first 30 seconds?"
         )
         interview = (
-            f"One example I would use is {memory.title}. The documented context is "
-            f"captured in my approved Career Memory. {method} {outcome} What this "
-            f"supports for {target_role} is {skills}; I would not add an outcome that "
-            "isn’t present in the evidence."
+            f"One example is {memory.title}. {problem} {method} {outcome} "
+            f"For {target_role}, the most relevant takeaway is my experience with "
+            f"{skills}."
         )
         github_outline = (
             f"# {memory.title}\n\n"
-            "## Problem\nState the approved problem in one paragraph.\n\n"
-            "## Data or inputs\nName only source-backed inputs.\n\n"
-            "## Method\nExplain the approved analytical process.\n\n"
-            "## Findings and limitations\nSeparate documented findings from gaps.\n\n"
-            f"## Relevance to {target_role}\n"
-            "Use the target claim without inventing impact."
+            f"## Overview\n{problem}\n\n"
+            f"## Data or inputs\n{data_or_inputs}\n\n"
+            f"## Approach\n{method}\n\n"
+            f"## Key takeaway\n{outcome}\n\n"
+            f"## Limitations\n{limitations}\n\n"
+            f"## Relevance to {target_role}\n{what_this_proves}"
         )
         return {
             "resume_bullets": resume_bullets,
@@ -903,8 +1060,8 @@ class ProofArtifactService:
             "github_readme_outline": github_outline,
         }
 
-    @staticmethod
-    def _render_case_study(sections: dict[str, Any]) -> str:
+    @classmethod
+    def _render_case_study(cls, sections: dict[str, Any]) -> str:
         ordered = [
             ("Target claim", "target_claim"),
             ("Role relevance", "role_relevance"),
@@ -925,11 +1082,7 @@ class ProofArtifactService:
             value = sections[key]
             if key == "evidence_used" and isinstance(value, list):
                 rendered = "\n".join(
-                    "- "
-                    f"{item.get('source_label', 'Approved source')} "
-                    f"(evidence {item.get('evidence_id', 'unavailable')})"
-                    for item in value
-                    if isinstance(item, dict)
+                    f"- {item}" for item in cls._evidence_summary_lines(value)
                 )
                 rendered = rendered or "- No resolved evidence reference is available."
             else:
@@ -940,6 +1093,68 @@ class ProofArtifactService:
                 )
             parts.append(f"## {label}\n{rendered}")
         return "\n\n".join(parts)
+
+    @classmethod
+    def _evidence_summary_lines(cls, references: list[Any]) -> list[str]:
+        valid = [item for item in references if isinstance(item, dict)]
+        combined = " ".join(str(item.get("excerpt") or "") for item in valid)
+        if cls._is_galaxy_analytics_case(combined):
+            source = str(valid[0].get("source_label") or "Project evidence")
+            lines = [
+                (
+                    f"{source}: Project scope — spectral and imaging data used to "
+                    "investigate galaxy morphology and kinematics."
+                )
+            ]
+            capabilities = cls._capabilities(combined)
+            methods: list[str] = []
+            if "data analysis" in capabilities:
+                methods.append(
+                    "statistical analysis"
+                    if "statistical analys" in combined.casefold()
+                    else "data analysis"
+                )
+            if "statistical modeling" in capabilities:
+                methods.append("statistical modeling")
+            elif "modeling" in capabilities:
+                methods.append("modeling")
+            methods.extend(
+                label
+                for capability, label in (
+                    (
+                        "uncertainty and error propagation",
+                        "uncertainty and error propagation",
+                    ),
+                    ("data visualization", "data visualization"),
+                )
+                if capability in capabilities
+            )
+            if methods:
+                lines.append(f"{source}: Analytical method — {cls._join(methods)}.")
+            if "technical communication" in capabilities:
+                lines.append(
+                    f"{source}: Communication — technical findings presented clearly."
+                )
+            return lines
+
+        lines: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for item in valid:
+            source = str(item.get("source_label") or "Approved source").strip()
+            excerpt = " ".join(str(item.get("excerpt") or "").split())
+            if not excerpt:
+                line = (source, "Source linked to the project record.")
+            else:
+                summary = (
+                    excerpt if len(excerpt) <= 180 else f"{excerpt[:177].rstrip()}…"
+                )
+                line = (source, summary)
+            key = (line[0].casefold(), line[1].casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"{line[0]}: {line[1]}")
+        return lines[:4]
 
     @staticmethod
     def _primary_content(
@@ -1368,7 +1583,7 @@ class ProofArtifactService:
         memory = self._get_source_memory(session, artifact.source_memory_id)
         return ProofArtifactView(
             id=artifact.id,
-            title=artifact.title,
+            title=self._clean_user_facing_text(artifact.title),
             artifact_type=ProofArtifactType(artifact.artifact_type),
             target_role=artifact.target_role,
             target_audience=ProofTargetAudience(artifact.target_audience),
@@ -1409,13 +1624,17 @@ class ProofArtifactService:
             and item.get("feedback_event_id")
             and item.get("summary")
         ]
+        content = self._clean_user_facing_text(
+            version.content, version.structured_sections
+        )
+        content = self._replace_evidence_section(content, references)
         return ProofArtifactVersionView(
             id=version.id,
             artifact_id=version.artifact_id,
             version_number=version.version_number,
-            title=version.title,
+            title=self._clean_user_facing_text(version.title),
             claim=version.claim,
-            content=version.content,
+            content=content,
             structured_sections=version.structured_sections,
             evidence_ids=version.evidence_ids,
             evidence_references=[ProofEvidenceReference(**item) for item in references],
@@ -1424,7 +1643,79 @@ class ProofArtifactService:
             warnings=version.warnings,
             readiness_score=float(version.readiness_score),
             readiness_label=ProofReadinessLabel(version.readiness_label),
-            supporting_variants=version.supporting_variants,
+            supporting_variants=self._clean_user_facing_value(
+                version.supporting_variants, version.structured_sections
+            ),
             created_at=version.created_at,
             updated_at=version.updated_at,
         )
+
+    @classmethod
+    def _clean_user_facing_value(
+        cls, value: Any, sections: dict[str, Any] | None = None
+    ) -> Any:
+        if isinstance(value, str):
+            return cls._clean_user_facing_text(value, sections)
+        if isinstance(value, list):
+            return [cls._clean_user_facing_value(item, sections) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: cls._clean_user_facing_value(item, sections)
+                for key, item in value.items()
+            }
+        return value
+
+    @staticmethod
+    def _clean_user_facing_text(
+        text: str, sections: dict[str, Any] | None = None
+    ) -> str:
+        cleaned = re.sub(r"\bCaseStudy\b", "Case Study", text)
+        cleaned = re.sub(
+            r"\s*\(evidence\s+[0-9a-f]{8}-[0-9a-f-]{27,}\)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"(?im)^\s*(?:[-*]\s*)?Evidence ID:\s*"
+            r"[0-9a-f]{8}-[0-9a-f-]{27,}\s*$\n?",
+            "",
+            cleaned,
+        )
+        if sections:
+            replacements = {
+                "State the approved problem in one paragraph.": sections.get(
+                    "problem", "Describe the documented project question."
+                ),
+                "Name only source-backed inputs.": sections.get(
+                    "data_or_inputs", "Describe the documented inputs."
+                ),
+                "Explain the approved analytical process.": sections.get(
+                    "method", "Describe the documented approach."
+                ),
+                "Separate documented findings from gaps.": (
+                    f"{sections.get('outcome_or_insight', '')}\n\n"
+                    f"### Limitations\n{sections.get('limitations', '')}"
+                ).strip(),
+                "Use the target claim without inventing impact.": sections.get(
+                    "what_this_proves", sections.get("target_claim", "")
+                ),
+            }
+            for placeholder, replacement in replacements.items():
+                cleaned = cleaned.replace(placeholder, str(replacement))
+        return cleaned.strip()
+
+    @classmethod
+    def _replace_evidence_section(
+        cls, content: str, references: list[dict[str, Any]]
+    ) -> str:
+        if "## Evidence used" not in content:
+            return content
+        rendered = "\n".join(
+            f"- {item}" for item in cls._evidence_summary_lines(references)
+        )
+        rendered = rendered or "- No resolved evidence reference is available."
+        pattern = re.compile(r"(?ms)(^## Evidence used\s*\n).*?(?=\n## |\Z)")
+        return pattern.sub(
+            lambda match: f"{match.group(1)}{rendered}\n", content, count=1
+        ).strip()

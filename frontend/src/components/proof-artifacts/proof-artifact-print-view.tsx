@@ -90,7 +90,7 @@ export function ProofArtifactPrintView({ artifactId }: { artifactId: string }) {
         <ProofArtifactDocument content={version.content} />
         <footer className="mt-8 border-t border-[#dfe7e2] pt-3 text-[9px] leading-4 text-[#71817b]">
           <p>
-            Built from approved Career Memory: {artifact.source_memory_title} · {version.evidence_references.length} resolved evidence reference
+            Source project: {artifact.source_memory_title} · {version.evidence_references.length} supporting reference
             {version.evidence_references.length === 1 ? "" : "s"}
           </p>
           {version.evidence_references.length > 0 && (

@@ -98,14 +98,14 @@ export function ProofArtifactWorkspace({
           artifactResult.status === "fulfilled" ? artifactResult.value : [];
         const memoriesFailed = memoryResult.status === "rejected";
         const artifactsFailed = artifactResult.status === "rejected";
+        const defaultArtifact =
+          initialMemoryId || initialDiagnosisResultId
+            ? null
+            : (nextArtifacts.find((item) => item.status !== "ARCHIVED") ?? null);
         setMemoryLoadFailed(memoriesFailed);
         setMemories(nextMemories);
         setArtifacts(nextArtifacts);
-        setActiveArtifact(
-          initialMemoryId || initialDiagnosisResultId
-            ? null
-            : (nextArtifacts.find((item) => item.status !== "ARCHIVED") ?? null),
-        );
+        setActiveArtifact(defaultArtifact);
 
         if (initialMemoryId) {
           if (nextMemories.some((memory) => memory.id === initialMemoryId)) {
@@ -113,6 +113,11 @@ export function ProofArtifactWorkspace({
           } else {
             setMemoryId("");
           }
+        } else if (defaultArtifact) {
+          setMemoryId(defaultArtifact.source_memory_id);
+          setTargetRole(defaultArtifact.target_role);
+          setArtifactType(defaultArtifact.artifact_type);
+          setTargetAudience(defaultArtifact.target_audience);
         } else if (nextMemories.length) {
           setMemoryId(nextMemories[0].id);
         }
@@ -142,7 +147,9 @@ export function ProofArtifactWorkspace({
         } else {
           setLoadError("");
           setNotice(
-            initialDiagnosisResultId
+            defaultArtifact
+              ? `Viewing saved artifact built from ${defaultArtifact.source_memory_title}. Change an input to start a new artifact.`
+              : initialDiagnosisResultId
               ? "Diagnosis context loaded. Review the suggested memory and target before generating."
               : "Choose one approved memory and the audience that should recognize it.",
           );
@@ -161,6 +168,12 @@ export function ProofArtifactWorkspace({
       ...current.filter((artifact) => artifact.id !== updated.id),
     ]);
     setActiveArtifact(updated);
+  }
+
+  function startNewArtifact(message: string) {
+    if (!activeArtifact) return;
+    setActiveArtifact(null);
+    setNotice(message);
   }
 
   async function generate() {
@@ -358,7 +371,14 @@ export function ProofArtifactWorkspace({
                     <select
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none ring-[#dceee5] focus:ring-4"
                       disabled={loading || busy}
-                      onChange={(event) => setMemoryId(event.target.value)}
+                      onChange={(event) => {
+                        setMemoryId(event.target.value);
+                        if (event.target.value !== activeArtifact?.source_memory_id) {
+                          startNewArtifact(
+                            "Source memory changed. Complete the settings below to generate a new artifact; saved artifacts remain in the list.",
+                          );
+                        }
+                      }}
                       value={memoryId}
                     >
                       <option value="">Select approved memory</option>
@@ -374,7 +394,14 @@ export function ProofArtifactWorkspace({
                     Target role or program
                     <input
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none ring-[#dceee5] placeholder:text-[#96a39d] focus:ring-4"
-                      onChange={(event) => setTargetRole(event.target.value)}
+                      onChange={(event) => {
+                        setTargetRole(event.target.value);
+                        if (event.target.value !== activeArtifact?.target_role) {
+                          startNewArtifact(
+                            "Target changed. Generate to create a new artifact; the saved artifact remains in the list.",
+                          );
+                        }
+                      }}
                       placeholder="Data Analytics / AI internship"
                       value={targetRole}
                     />
@@ -383,9 +410,15 @@ export function ProofArtifactWorkspace({
                     Artifact type
                     <select
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none"
-                      onChange={(event) =>
-                        setArtifactType(event.target.value as ProofArtifactType)
-                      }
+                      onChange={(event) => {
+                        const nextType = event.target.value as ProofArtifactType;
+                        setArtifactType(nextType);
+                        if (nextType !== activeArtifact?.artifact_type) {
+                          startNewArtifact(
+                            "Artifact type changed. Generate to create a new artifact; the saved artifact remains in the list.",
+                          );
+                        }
+                      }}
                       value={artifactType}
                     >
                       {artifactTypes.map((option) => (
@@ -399,9 +432,15 @@ export function ProofArtifactWorkspace({
                     Target channel
                     <select
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none"
-                      onChange={(event) =>
-                        setTargetAudience(event.target.value as ProofTargetAudience)
-                      }
+                      onChange={(event) => {
+                        const nextAudience = event.target.value as ProofTargetAudience;
+                        setTargetAudience(nextAudience);
+                        if (nextAudience !== activeArtifact?.target_audience) {
+                          startNewArtifact(
+                            "Target channel changed. Generate to create a new artifact; the saved artifact remains in the list.",
+                          );
+                        }
+                      }}
                       value={targetAudience}
                     >
                       {targetAudiences.map((option) => (
@@ -448,8 +487,9 @@ export function ProofArtifactWorkspace({
                 Your one-page case study will appear here.
               </h2>
               <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[#6d7e77]">
-                CareerOS will preserve evidence IDs, identify unsupported claims,
-                and create channel-specific variants from the same approved memory.
+                CareerOS will preserve the evidence linkage internally, identify
+                unsupported claims, and create channel-specific variants from the
+                same approved memory.
               </p>
             </section>
           )}
@@ -511,6 +551,9 @@ function SavedArtifacts({
             <span className="mt-1 block text-[10px] font-bold uppercase tracking-[0.1em] text-[#6d8077]">
               {proofArtifactStatusLabel(artifact.status)} · Version {artifact.latest_version.version_number}
             </span>
+            <span className="mt-1 block text-[11px] text-[#71817b]">
+              From {artifact.source_memory_title}
+            </span>
           </button>
         ))}
       </div>
@@ -557,6 +600,10 @@ function ArtifactOutput({
 
   return (
     <div className="min-w-0 space-y-5">
+      <div className="rounded-2xl border border-[#c9ddd2] bg-[#edf6f0] px-4 py-3 text-sm text-[#365f4e]">
+        <span className="font-semibold">Viewing saved artifact.</span> Built from
+        approved memory: {artifact.source_memory_title}
+      </div>
       <section className="rounded-[28px] border border-[#dce4df] bg-white p-5 sm:p-7">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div>
@@ -658,7 +705,7 @@ function ArtifactOutput({
         <article className="proof-preview-sheet mx-auto max-w-[820px] rounded-sm bg-white px-6 py-8 shadow-[0_18px_50px_rgba(31,55,45,0.12)] sm:px-10 sm:py-11">
           <ProofArtifactDocument content={content} />
           <footer className="mt-8 border-t border-[#dfe7e2] pt-3 text-[10px] leading-4 text-[#7a8983]">
-            Built from approved Career Memory: {artifact.source_memory_title} · {version.evidence_references.length} resolved evidence reference
+            Source project: {artifact.source_memory_title} · {version.evidence_references.length} supporting reference
             {version.evidence_references.length === 1 ? "" : "s"}
           </footer>
         </article>
@@ -741,13 +788,15 @@ function EvidencePanel({ artifact }: { artifact: ProofArtifact }) {
                 {reference.source_label}
               </p>
               {reference.excerpt && (
-                <p className="mt-2 text-xs leading-5 text-[#687a73]">
-                  “{reference.excerpt}”
-                </p>
+                <div className="mt-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#84918b]">
+                    Approved source excerpt
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-[#687a73]">
+                    “{reference.excerpt}”
+                  </p>
+                </div>
               )}
-              <p className="mt-2 break-all text-[10px] text-[#8a9791]">
-                Evidence ID: {reference.evidence_id}
-              </p>
             </article>
           ))
         ) : (
