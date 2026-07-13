@@ -2,9 +2,16 @@
 
 ## Status
 
-Proposed next direction after the merged Sprint 10 MVP. This is a product and
-technical specification for the Sprint 11 foundation; it is not an implemented
-backend or frontend feature.
+Implemented in Sprint 11. CareerOS now persists diagnosis sessions and results,
+runs a local deterministic diagnosis from approved canonical Career Memory,
+stores lightweight Teach CareerOS feedback events, and exposes the `/diagnosis`
+workspace.
+
+The implementation is intentionally broader than the minimal persistence option
+below: full structured diagnosis runs are stored with evidence IDs, approved
+feedback event IDs, and a `local-deterministic-v0` version. Feedback events stay
+separate from canonical memory and only approved events may guide diagnosis
+framing; they are never treated as factual proof.
 
 ## Problem
 
