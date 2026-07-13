@@ -25,6 +25,7 @@ import {
   feedbackEventTypeLabel,
   feedbackStatusLabel,
 } from "@/lib/diagnosis-utils";
+import { buildProofArtifactHref } from "@/lib/proof-artifact-utils";
 
 const focusOptions: DiagnosisFocus[] = [
   "ANALYTICS",
@@ -327,7 +328,10 @@ export function DiagnosisWorkspace() {
           <EmptyMemoryDiagnosis result={diagnosis.result} />
         )}
         {diagnosis?.status === "COMPLETE" && (
-          <DiagnosisBrief result={diagnosis.result} />
+          <DiagnosisBrief
+            result={diagnosis.result}
+            targetRole={diagnosis.target_role}
+          />
         )}
 
         <TeachCareerOSPanel
@@ -379,7 +383,13 @@ function EmptyMemoryDiagnosis({ result }: { result: DiagnosisResult }) {
   );
 }
 
-function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
+function DiagnosisBrief({
+  result,
+  targetRole,
+}: {
+  result: DiagnosisResult;
+  targetRole?: string | null;
+}) {
   return (
     <div className="mt-5 space-y-5">
       <section className="rounded-[30px] bg-[#173f35] p-6 text-white sm:p-8">
@@ -425,7 +435,7 @@ function DiagnosisBrief({ result }: { result: DiagnosisResult }) {
         </BriefPanel>
       </div>
 
-      <ProofSprintPanel result={result} />
+      <ProofSprintPanel result={result} targetRole={targetRole} />
 
       <section className="rounded-[26px] border border-[#e2cfaa] bg-[#fff7e7] p-6">
         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#956b2d]">
@@ -537,8 +547,21 @@ function EvidenceMap({ result }: { result: DiagnosisResult }) {
   );
 }
 
-function ProofSprintPanel({ result }: { result: DiagnosisResult }) {
+function ProofSprintPanel({
+  result,
+  targetRole,
+}: {
+  result: DiagnosisResult;
+  targetRole?: string | null;
+}) {
   const sprint = result.proof_sprint;
+  const suggestedMemoryId =
+    sprint.evidence_to_strengthen[0] ?? result.evidence_map[0]?.memory_id;
+  const proofArtifactHref = buildProofArtifactHref({
+    sourceMemoryId: suggestedMemoryId,
+    sourceDiagnosisResultId: result.id,
+    targetRole,
+  });
   return (
     <section className="rounded-[28px] border border-[#cbded3] bg-[#edf6f0] p-6 sm:p-8">
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#3f8064]">
@@ -559,6 +582,14 @@ function ProofSprintPanel({ result }: { result: DiagnosisResult }) {
         <div className="space-y-4">
           <SprintDetail label="Expected artifact" value={sprint.expected_artifact} />
           <SprintDetail label="How to use it" value={sprint.application_use} />
+          {suggestedMemoryId && (
+            <Link
+              className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-[#173f35] px-5 text-sm font-semibold text-white transition hover:bg-[#285b4a]"
+              href={proofArtifactHref}
+            >
+              Build this artifact
+            </Link>
+          )}
         </div>
       </div>
     </section>

@@ -113,6 +113,9 @@ test("navigation and dashboard link to Career Diagnosis", () => {
   );
 
   assert.match(navigation, /href: "\/diagnosis", label: "Diagnosis"/);
+  assert.match(navigation, /href: "\/proof-artifacts", label: "Proof"/);
   assert.match(dashboard, /Run Career Diagnosis/);
   assert.match(dashboard, /href: "\/diagnosis"/);
+  assert.match(dashboard, /Build a proof artifact/);
+  assert.match(dashboard, /href: "\/proof-artifacts"/);
 });

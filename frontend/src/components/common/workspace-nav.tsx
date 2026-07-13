@@ -5,6 +5,7 @@ import { Brand } from "@/components/common/brand";
 const links = [
   { href: "/dashboard", label: "Career Memory", key: "dashboard" },
   { href: "/diagnosis", label: "Diagnosis", key: "diagnosis" },
+  { href: "/proof-artifacts", label: "Proof", key: "proof" },
   { href: "/review", label: "Review", key: "review" },
   { href: "/stories", label: "Stories", key: "stories" },
   { href: "/applications", label: "Applications", key: "applications" },
