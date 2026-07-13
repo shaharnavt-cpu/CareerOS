@@ -16,6 +16,7 @@ from app.models.career import (
     Skill,
     SkillLink,
 )
+from app.models.diagnosis import CareerFeedbackEvent, DiagnosisResult, DiagnosisSession
 from app.models.evidence import EvidenceItem, EvidenceLink
 from app.models.listening import (
     ListeningClusterMember,
@@ -35,6 +36,9 @@ __all__ = [
     "ApplicationOpportunity",
     "ApplicationQuestion",
     "CanonicalMemoryRecord",
+    "CareerFeedbackEvent",
+    "DiagnosisResult",
+    "DiagnosisSession",
     "Education",
     "EvidenceItem",
     "EvidenceLink",

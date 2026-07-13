@@ -70,6 +70,12 @@ export function DashboardShell() {
     }
     if (summary.canonical_total > 0) {
       actions.push({
+        title: "Run Career Diagnosis",
+        detail: "Find your recognition gap and one seven-day proof sprint",
+        action: "Diagnose",
+        href: "/diagnosis",
+      });
+      actions.push({
         title: "Try Application Intelligence",
         detail: "Paste a job description and draft from approved memory",
         action: "Apply",
