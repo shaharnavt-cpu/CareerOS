@@ -308,6 +308,12 @@ export function ProofArtifactWorkspace({
               may guide framing, but remain strategy signals—not proof of skill or
               causality.
             </p>
+            <Link
+              className="mt-3 inline-flex text-xs font-semibold text-[#2f6b53] underline decoration-[#89b7a0] underline-offset-4"
+              href={`/enrichments${memoryId ? `?memory_id=${memoryId}` : ""}`}
+            >
+              Need richer proof? Add project evidence
+            </Link>
           </div>
         </header>
 

@@ -38,6 +38,7 @@ EXPECTED_TABLES = {
     "diagnosis_sessions",
     "diagnosis_results",
     "career_feedback_events",
+    "career_memory_enrichments",
     "proof_artifacts",
     "proof_artifact_versions",
     "stories",

@@ -323,6 +323,31 @@ export function ReviewWorkspace() {
                           </span>{" "}
                           {item.reasoning_summary}
                         </p>
+                        {proposalIdentityResolution(item) && (
+                          <div className="rounded-xl border border-[#e7c987] bg-[#fff8e8] p-3 text-[#76541f]">
+                            <p className="font-semibold">
+                              This looks like an enrichment of an existing memory.
+                            </p>
+                            <p className="mt-1">
+                              Possible duplicate:{" "}
+                              {
+                                proposalIdentityResolution(item)
+                                  ?.matched_memory_title
+                              }
+                              . CareerOS will not create a new project memory unless
+                              you confirm.
+                            </p>
+                            {proposalIdentityResolution(item)
+                              ?.matched_memory_id && (
+                              <Link
+                                className="mt-2 inline-flex font-semibold underline underline-offset-4"
+                                href={`/enrichments?memory_id=${proposalIdentityResolution(item)?.matched_memory_id}&proposal_id=${encodeURIComponent(item.id)}`}
+                              >
+                                Convert to enrichment
+                              </Link>
+                            )}
+                          </div>
+                        )}
                         {item.clarification && (
                           <div className="rounded-xl border border-[#ead6a9] bg-[#fff7e5] p-3 text-[#76541f]">
                             <p className="font-semibold">
@@ -396,4 +421,20 @@ export function ReviewWorkspace() {
       </div>
     </main>
   );
+}
+
+type ProposalIdentityResolution = {
+  resolution: string;
+  matched_memory_id?: string | null;
+  matched_memory_title?: string | null;
+};
+
+function proposalIdentityResolution(
+  proposal: KnowledgeProposal,
+): ProposalIdentityResolution | null {
+  const value = proposal.proposed_value._identity_resolution;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const resolution = (value as Record<string, unknown>).resolution;
+  if (typeof resolution !== "string") return null;
+  return value as ProposalIdentityResolution;
 }

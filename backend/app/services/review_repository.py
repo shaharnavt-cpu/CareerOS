@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import CanonicalMemoryRecord, ListeningEvidence, ReviewProposal, User
+from app.schemas.enrichments import MemoryResolutionKind
 from app.schemas.knowledge import (
     DEMO_USER_ID,
     ApprovalState,
@@ -21,6 +22,8 @@ from app.schemas.knowledge import (
     KnowledgeProposal,
     ReviewProposalType,
 )
+from app.services.memory_enrichment import CareerMemoryEnrichmentService
+from app.services.memory_identity import MemoryIdentityResolver
 
 
 class ReviewRepository:
@@ -32,6 +35,35 @@ class ReviewRepository:
     ) -> None:
         self._ensure_user(session, user_id)
         for proposal in proposals:
+            if proposal.proposal_type is ReviewProposalType.PROJECT:
+                resolution = self._resolve_project_identity(
+                    session, proposal, user_id
+                )
+                if resolution.resolution is MemoryResolutionKind.ENRICH_EXISTING:
+                    memory = session.get(
+                        CanonicalMemoryRecord, resolution.matched_memory_id
+                    )
+                    if memory is not None:
+                        CareerMemoryEnrichmentService(user_id=user_id).create_from_proposal(
+                            session, memory, proposal, resolution
+                        )
+                        continue
+                if resolution.resolution is MemoryResolutionKind.DUPLICATE_PROPOSAL:
+                    continue
+                if resolution.resolution in {
+                    MemoryResolutionKind.POSSIBLE_MERGE,
+                    MemoryResolutionKind.NEEDS_USER_CONFIRMATION,
+                }:
+                    proposal = proposal.model_copy(
+                        update={
+                            "proposed_value": {
+                                **proposal.proposed_value,
+                                "_identity_resolution": resolution.model_dump(
+                                    mode="json"
+                                ),
+                            }
+                        }
+                    )
             record = session.get(ReviewProposal, proposal.id)
             if record is None:
                 session.add(self._record(proposal, user_id))
@@ -40,6 +72,62 @@ class ReviewRepository:
                 DurableReviewStatus.NEEDS_CLARIFICATION.value,
             }:
                 self._apply_proposal(record, proposal)
+
+    def _resolve_project_identity(
+        self,
+        session: Session,
+        proposal: KnowledgeProposal,
+        user_id: uuid.UUID,
+    ):
+        memories = session.scalars(
+            select(CanonicalMemoryRecord)
+            .join(
+                ReviewProposal,
+                ReviewProposal.id == CanonicalMemoryRecord.review_proposal_id,
+            )
+            .where(
+                CanonicalMemoryRecord.user_id == user_id,
+                CanonicalMemoryRecord.memory_type == ReviewProposalType.PROJECT.value,
+                ReviewProposal.user_id == user_id,
+                ReviewProposal.decision.in_(
+                    [
+                        DurableReviewStatus.APPROVED.value,
+                        DurableReviewStatus.EDITED_APPROVED.value,
+                    ]
+                ),
+            )
+        ).all()
+        existing_proposals = session.scalars(
+            select(ReviewProposal).where(
+                ReviewProposal.user_id == user_id,
+                ReviewProposal.decision.in_(
+                    [
+                        DurableReviewStatus.PENDING_REVIEW.value,
+                        DurableReviewStatus.NEEDS_CLARIFICATION.value,
+                    ]
+                ),
+            )
+        ).all()
+        text = " ".join(
+            [
+                str(value)
+                for value in proposal.proposed_value.values()
+                if value is not None
+            ]
+            + [item.excerpt for item in proposal.evidence]
+        )
+        return MemoryIdentityResolver().resolve(
+            title=self._title(proposal),
+            text=text,
+            memory_type=ReviewProposalType.PROJECT.value,
+            memories=memories,
+            proposals=existing_proposals,
+            evidence_ids=[
+                str(item.evidence_id)
+                for item in proposal.evidence
+                if item.evidence_id is not None
+            ],
+        )
 
     def list_proposals(
         self, session: Session, user_id: uuid.UUID = DEMO_USER_ID

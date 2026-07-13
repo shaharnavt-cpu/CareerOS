@@ -132,6 +132,8 @@ The architecture is layered:
 
 - Universal Listening and evidence extraction create source observations.
 - Review Persistence stores proposals and decisions.
+- Project Evidence Enrichment resolves repeat evidence against approved memory
+  and requires review before deeper fields join the canonical projection.
 - Canonical Career Memory stores approved current knowledge.
 - Applications and artifacts preserve opportunity context and historical
   outputs.

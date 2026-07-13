@@ -421,10 +421,13 @@ class ProofArtifactService:
         outcome_or_insight = documented_outcome or self._outcome_or_insight(
             capabilities, approved_text
         )
+        role_relevance = self._field_text(
+            memory.structured_fields, "enriched_role_relevance"
+        ) or self._role_relevance(target_role, capabilities)
         sections: dict[str, Any] = {
             "title": title,
             "target_claim": claim,
-            "role_relevance": self._role_relevance(target_role, capabilities),
+            "role_relevance": role_relevance,
             "context": self._context(memory, capabilities, approved_text),
             "problem": problem,
             "data_or_inputs": data_or_inputs,
@@ -433,7 +436,7 @@ class ProofArtifactService:
             "skills_demonstrated": capabilities,
             "outcome_or_insight": outcome_or_insight,
             "limitations": self._limitations(
-                len(evidence_references), documented_outcome
+                memory, len(evidence_references), documented_outcome
             ),
             "what_this_proves": self._what_this_proves(
                 memory, target_role, capabilities, approved_text
@@ -449,6 +452,10 @@ class ProofArtifactService:
             documented_outcome,
             outcome_signals,
         )
+        approved_warnings = self._field_values(
+            memory.structured_fields, "warnings_not_to_claim"
+        )
+        warnings = list(dict.fromkeys([*warnings, *approved_warnings]))
         readiness_score, readiness_label = self._readiness(
             len(evidence_references),
             claim,
@@ -593,6 +600,7 @@ class ProofArtifactService:
         rules = [
             ("data analysis", ("data analysis", "analyz", "analys", "dataset")),
             ("Python", ("python",)),
+            ("Gaussian fitting", ("gaussian fit", "gaussian fitting")),
             (
                 "statistical modeling",
                 (
@@ -631,6 +639,7 @@ class ProofArtifactService:
         phrases = {
             "data analysis": "analyze complex data",
             "Python": "use Python",
+            "Gaussian fitting": "apply Gaussian fitting",
             "statistical modeling": "apply statistical modeling",
             "modeling": "apply modeling",
             "uncertainty and error propagation": "reason about uncertainty",
@@ -658,6 +667,7 @@ class ProofArtifactService:
     ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_method",
             "method",
             "methods",
             "methodology",
@@ -680,6 +690,7 @@ class ProofArtifactService:
             phrases.extend(
                 phrase
                 for capability, phrase in (
+                    ("Gaussian fitting", "Gaussian fitting"),
                     (
                         "uncertainty and error propagation",
                         "uncertainty and error propagation",
@@ -715,6 +726,7 @@ class ProofArtifactService:
     ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_problem",
             "problem",
             "objective",
             "research_question",
@@ -753,6 +765,7 @@ class ProofArtifactService:
     def _data_or_inputs(cls, memory: CanonicalMemoryRecord, approved_text: str) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_data_or_inputs",
             "data",
             "dataset",
             "datasets",
@@ -790,6 +803,9 @@ class ProofArtifactService:
         capabilities: list[str],
         approved_text: str,
     ) -> str:
+        enriched = cls._field_text(memory.structured_fields, "enriched_context")
+        if enriched:
+            return enriched
         if cls._is_galaxy_analytics_case(approved_text):
             project_kind = (
                 "This honors capstone"
@@ -840,8 +856,15 @@ class ProofArtifactService:
 
     @staticmethod
     def _limitations(
-        resolved_evidence_count: int, documented_outcome: str | None
+        memory: CanonicalMemoryRecord,
+        resolved_evidence_count: int,
+        documented_outcome: str | None,
     ) -> str:
+        enriched = ProofArtifactService._field_text(
+            memory.structured_fields, "enriched_limitations"
+        )
+        if enriched:
+            return enriched
         if not resolved_evidence_count:
             return (
                 "The current draft needs a source that documents the method or result "
@@ -1254,6 +1277,7 @@ class ProofArtifactService:
         if ProofArtifactService._is_analytics_target(target_role):
             relevant = {
                 "data analysis",
+                "Gaussian fitting",
                 "statistical modeling",
                 "modeling",
                 "uncertainty and error propagation",
@@ -1265,6 +1289,7 @@ class ProofArtifactService:
             relevant = {
                 "data analysis",
                 "Python",
+                "Gaussian fitting",
                 "statistical modeling",
                 "modeling",
                 "technical communication",
@@ -1278,6 +1303,7 @@ class ProofArtifactService:
     def _documented_outcome(cls, fields: dict[str, Any]) -> str | None:
         return cls._field_text(
             fields,
+            "enriched_findings",
             "outcome",
             "outcomes",
             "result",
@@ -1331,6 +1357,22 @@ class ProofArtifactService:
                 if found:
                     return found
         return None
+
+    @classmethod
+    def _field_values(cls, fields: dict[str, Any], *keys: str) -> list[str]:
+        wanted = {key.casefold().replace("_", " ") for key in keys}
+        for key, value in fields.items():
+            normalized = key.casefold().replace("_", " ")
+            if normalized not in wanted:
+                continue
+            values = value if isinstance(value, list) else [value]
+            return [str(item).strip() for item in values if str(item).strip()]
+        for value in fields.values():
+            if isinstance(value, dict):
+                found = cls._field_values(value, *keys)
+                if found:
+                    return found
+        return []
 
     @staticmethod
     def _render_value(value: Any) -> str | None:

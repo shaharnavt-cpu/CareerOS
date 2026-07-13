@@ -650,6 +650,28 @@ class CareerDiagnosisService:
                 "is "
                 "recognizable evidence, not application volume."
             )
+        enriched_project = next(
+            (
+                memory
+                for memory in memories
+                if memory.memory_type == "PROJECT"
+                and memory.structured_fields.get("approved_enrichment_ids")
+                and all(
+                    memory.structured_fields.get(key)
+                    for key in (
+                        "enriched_method",
+                        "enriched_data_or_inputs",
+                        "enriched_limitations",
+                    )
+                )
+            ),
+            None,
+        )
+        if enriched_project is not None:
+            gap += (
+                f" Your {enriched_project.title} project now has stronger proof "
+                "because its approved method, data, and limitations are documented."
+            )
         if approved_feedback:
             gap += (
                 " Approved Teach CareerOS notes shape this strategy, but remain "

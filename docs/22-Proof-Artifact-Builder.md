@@ -145,6 +145,13 @@ The service then derives a claim, role relevance, method, limitations,
 structured case-study sections, primary text, and supporting variants. It does
 not mutate Career Memory, diagnosis, evidence, or feedback.
 
+Sprint 13 adds approved project enrichment to the canonical-memory projection.
+When present, the builder gives enriched problem, input, method, finding,
+limitation, context, relevance, and warning fields priority over thin
+resume-level summaries. Proposed, rejected, and archived enrichment is not part
+of that projection and cannot guide generation. The builder links to
+`/enrichments` when a project needs deeper proof.
+
 ## Readiness and warnings
 
 Each version has a readiness score from `0.0` to `1.0` and one label:
