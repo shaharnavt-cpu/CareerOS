@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  artifactMatchesSelection,
   buildProofArtifactHref,
   proofArtifactStatusLabel,
   proofArtifactTypeLabel,
@@ -42,6 +43,61 @@ test("supporting variants become copy-ready plain text", () => {
   assert.equal(proofVariantText({ unsupported: true }), "");
 });
 
+test("proof artifact preview only matches its selected memory and settings", () => {
+  const gasArtifact = {
+    source_memory_id: "gas-memory",
+    target_role: "Data Scientist Intern",
+    artifact_type: "CASE_STUDY" as const,
+    target_audience: "APPLICATION_UPLOAD" as const,
+  };
+
+  assert.equal(
+    artifactMatchesSelection(gasArtifact, {
+      memoryId: "gas-memory",
+      targetRole: " Data Scientist Intern ",
+      artifactType: "CASE_STUDY",
+      targetAudience: "APPLICATION_UPLOAD",
+    }),
+    true,
+  );
+  assert.equal(
+    artifactMatchesSelection(gasArtifact, {
+      memoryId: "unicorn-memory",
+      targetRole: "AI Engineer Intern",
+      artifactType: "CASE_STUDY",
+      targetAudience: "APPLICATION_UPLOAD",
+    }),
+    false,
+  );
+  assert.equal(
+    artifactMatchesSelection(gasArtifact, {
+      memoryId: "gas-memory",
+      targetRole: "AI Engineer Intern",
+      artifactType: "CASE_STUDY",
+      targetAudience: "APPLICATION_UPLOAD",
+    }),
+    false,
+  );
+  assert.equal(
+    artifactMatchesSelection(gasArtifact, {
+      memoryId: "gas-memory",
+      targetRole: "Data Scientist Intern",
+      artifactType: "GITHUB_README",
+      targetAudience: "APPLICATION_UPLOAD",
+    }),
+    false,
+  );
+  assert.equal(
+    artifactMatchesSelection(gasArtifact, {
+      memoryId: "gas-memory",
+      targetRole: "Data Scientist Intern",
+      artifactType: "CASE_STUDY",
+      targetAudience: "GITHUB",
+    }),
+    false,
+  );
+});
+
 test("proof artifact route and workspace expose the complete v0 flow", () => {
   const route = readFileSync(
     new URL("../app/proof-artifacts/page.tsx", import.meta.url),
@@ -62,6 +118,14 @@ test("proof artifact route and workspace expose the complete v0 flow", () => {
   assert.match(route, /target_role/);
   assert.match(workspace, /Approved memory/);
   assert.match(workspace, /Approve career memories before building a proof artifact/);
+  assert.match(
+    workspace,
+    /Factual claims come from approved canonical memory and approved\s+enrichments for the selected memory\./,
+  );
+  assert.match(
+    workspace,
+    /Approved outcome signals may\s+guide framing, but remain strategy-only—not proof of skill or\s+causality\./,
+  );
   assert.match(workspace, /Generate proof artifact/);
   assert.match(workspace, /One-page artifact preview/);
   assert.match(workspace, /Viewing saved artifact/);
@@ -83,6 +147,13 @@ test("proof artifact route and workspace expose the complete v0 flow", () => {
   assert.match(workspace, /Outreach blurb/);
   assert.match(workspace, /label={`Copy \$\{label\.toLowerCase\(\)\}`}/);
   assert.match(workspace, /Open print view/);
+  assert.match(workspace, /artifactMatchesSelection/);
+  assert.match(
+    workspace,
+    /Generate a new artifact for the selected memory\./,
+  );
+  assert.match(workspace, /activeId=\{visibleArtifact\?\.id\}/);
+  assert.match(workspace, /artifact=\{visibleArtifact\}/);
 });
 
 test("print route offers a clean browser PDF path", () => {

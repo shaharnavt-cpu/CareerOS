@@ -1,4 +1,5 @@
 import type {
+  ProofArtifact,
   ProofArtifactStatus,
   ProofArtifactType,
   ProofArtifactVersion,
@@ -80,4 +81,26 @@ export function proofVariantText(value: unknown): string {
 
 export function proofCaseStudyText(version: ProofArtifactVersion): string {
   return version.content.trim();
+}
+
+export type ProofArtifactSelection = {
+  memoryId: string;
+  targetRole: string;
+  artifactType: ProofArtifactType;
+  targetAudience: ProofTargetAudience;
+};
+
+export function artifactMatchesSelection(
+  artifact: Pick<
+    ProofArtifact,
+    "source_memory_id" | "target_role" | "artifact_type" | "target_audience"
+  >,
+  selection: ProofArtifactSelection,
+): boolean {
+  return (
+    artifact.source_memory_id === selection.memoryId &&
+    artifact.target_role.trim() === selection.targetRole.trim() &&
+    artifact.artifact_type === selection.artifactType &&
+    artifact.target_audience === selection.targetAudience
+  );
 }

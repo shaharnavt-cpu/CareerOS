@@ -130,5 +130,8 @@ class EnrichmentView(BaseModel):
     identity_resolution: MemoryIdentityResolution
     warnings: list[str]
     proof_artifact_readiness_impact: str
+    memory_quality_impact: list[str]
+    missing_or_weak_sections: list[str]
+    project_boundary: str
     created_at: datetime
     updated_at: datetime

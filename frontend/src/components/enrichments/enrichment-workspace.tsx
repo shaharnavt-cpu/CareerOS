@@ -7,6 +7,7 @@ import { WorkspaceNav } from "@/components/common/workspace-nav";
 import {
   convertProposalToEnrichment,
   createEnrichment,
+  isDuplicateEnrichmentError,
   listEnrichments,
   updateEnrichment,
   type EnrichmentStatus,
@@ -22,6 +23,15 @@ type EnrichmentWorkspaceProps = {
   proposalId?: string;
 };
 
+type DuplicateEnrichmentWarning = {
+  message: string;
+  existingEnrichmentId?: string;
+  existingStatus?: EnrichmentStatus;
+};
+
+const duplicateEnrichmentMessage =
+  "This evidence already appears to be saved for this project. No duplicate enrichment was created.";
+
 export function EnrichmentWorkspace({
   initialMemoryId,
   proposalId,
@@ -34,6 +44,8 @@ export function EnrichmentWorkspace({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftFields, setDraftFields] = useState<Record<string, string>>({});
+  const [duplicateWarning, setDuplicateWarning] =
+    useState<DuplicateEnrichmentWarning | null>(null);
   const [notice, setNotice] = useState(
     "Loading approved Career Memory and enrichment proposals...",
   );
@@ -106,14 +118,31 @@ export function EnrichmentWorkspace({
       const created = await createEnrichment(memoryId, enrichmentText.trim());
       replaceEnrichment(created);
       setEnrichmentText("");
+      setDuplicateWarning(null);
       setNotice(
         `CareerOS thinks this belongs to ${created.target_memory.title}. Review it before approval.`,
       );
     } catch (error) {
-      setNotice(errorMessage(error));
+      if (isDuplicateEnrichmentError(error)) {
+        setDuplicateWarning({
+          message: duplicateEnrichmentMessage,
+          existingEnrichmentId: error.existingEnrichmentId,
+          existingStatus: error.existingStatus,
+        });
+        setNotice(
+          "No duplicate enrichment was created. The existing project evidence remains unchanged.",
+        );
+      } else {
+        setNotice(errorMessage(error));
+      }
     } finally {
       setBusyId(null);
     }
+  }
+
+  function changeEnrichmentText(value: string) {
+    setEnrichmentText(value);
+    setDuplicateWarning(null);
   }
 
   async function convertProposal() {
@@ -259,7 +288,10 @@ export function EnrichmentWorkspace({
               <select
                 className="mt-2 w-full rounded-xl border border-[#cfdcd5] bg-white px-3 py-3 text-sm outline-none focus:ring-4 focus:ring-[#dceee5]"
                 disabled={loading || !projectMemories.length}
-                onChange={(event) => setMemoryId(event.target.value)}
+                onChange={(event) => {
+                  setMemoryId(event.target.value);
+                  setDuplicateWarning(null);
+                }}
                 value={memoryId}
               >
                 {!projectMemories.length && <option value="">No approved projects</option>}
@@ -274,13 +306,29 @@ export function EnrichmentWorkspace({
               Project details
               <textarea
                 className="mt-2 min-h-64 w-full rounded-xl border border-[#cfdcd5] px-3 py-3 text-sm leading-6 outline-none focus:ring-4 focus:ring-[#dceee5]"
-                onChange={(event) => setEnrichmentText(event.target.value)}
+                onChange={(event) => changeEnrichmentText(event.target.value)}
                 placeholder={
                   "Research question:\nData or inputs:\nMethods:\nFindings:\nLimitations:\nOutputs:"
                 }
                 value={enrichmentText}
               />
             </label>
+            {duplicateWarning && (
+              <div
+                aria-live="assertive"
+                className="mt-3 rounded-2xl border border-[#e2c986] bg-[#fff8e5] px-4 py-3 text-sm leading-6 text-[#72521e]"
+                role="alert"
+              >
+                <p className="font-semibold">{duplicateWarning.message}</p>
+                {duplicateWarning.existingEnrichmentId && (
+                  <p className="mt-1 text-xs text-[#866a38]">
+                    The matching {duplicateWarning.existingStatus
+                      ? label(duplicateWarning.existingStatus).toLowerCase()
+                      : "saved"} enrichment is highlighted below.
+                  </p>
+                )}
+              </div>
+            )}
             <p className="mt-3 text-xs leading-5 text-[#71827b]">
               Paste the abstract, methods, results, or project notes. CareerOS will
               not invent missing tools, findings, metrics, or outcomes.
@@ -327,9 +375,19 @@ export function EnrichmentWorkspace({
               <div className="mt-5 space-y-4">
                 {visibleEnrichments.map((enrichment) => (
                   <article
-                    className="rounded-[24px] border border-[#dce4df] bg-white p-5 shadow-[0_16px_40px_-34px_rgba(23,63,53,0.8)]"
+                    className={`rounded-[24px] border bg-white p-5 shadow-[0_16px_40px_-34px_rgba(23,63,53,0.8)] ${
+                      duplicateWarning?.existingEnrichmentId === enrichment.id
+                        ? "border-[#d1ad52] ring-2 ring-[#f1dfae]"
+                        : "border-[#dce4df]"
+                    }`}
+                    id={`enrichment-${enrichment.id}`}
                     key={enrichment.id}
                   >
+                    {duplicateWarning?.existingEnrichmentId === enrichment.id && (
+                      <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#8b672e]">
+                        Matching existing enrichment
+                      </p>
+                    )}
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#4f7c69]">
@@ -344,6 +402,12 @@ export function EnrichmentWorkspace({
                       </span>
                     </div>
 
+                    {enrichment.status === "APPROVED" && (
+                      <p className="mt-3 rounded-xl bg-[#eaf6ef] px-3 py-2 text-xs font-semibold text-[#2e6a50]">
+                        Approved enrichment used by proof artifacts.
+                      </p>
+                    )}
+
                     <div className="mt-4 rounded-2xl border border-[#dce8e1] bg-[#f7faf7] p-4 text-sm leading-6 text-[#526960]">
                       <p className="font-semibold text-[#315849]">
                         CareerOS thinks this belongs to {enrichment.target_memory.title}
@@ -353,6 +417,51 @@ export function EnrichmentWorkspace({
                         {Math.round(enrichment.confidence * 100)}% confidence - {" "}
                         {enrichment.identity_resolution.reasons.join(" ")}
                       </p>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      {enrichment.project_boundary && (
+                        <section className="rounded-xl border border-[#dfe7e2] bg-[#fbfcfa] p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#71847b]">
+                            Project boundary
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-[#345248]">
+                            {enrichment.project_boundary}
+                          </p>
+                        </section>
+                      )}
+                      {enrichment.memory_quality_impact.length > 0 && (
+                        <section className="rounded-xl border border-[#dfe7e2] bg-[#f3f8f4] p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#5f786d]">
+                            Memory quality impact
+                          </p>
+                          <ul className="mt-2 space-y-1 text-xs leading-5 text-[#345248]">
+                            {enrichment.memory_quality_impact.map((impact) => (
+                              <li className="flex gap-2" key={impact}>
+                                <span aria-hidden="true" className="text-[#4f896d]">
+                                  +
+                                </span>
+                                {impact}
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
+                      {enrichment.missing_or_weak_sections.length > 0 && (
+                        <section className="rounded-xl border border-[#ead6a9] bg-[#fffaf0] p-3 sm:col-span-2">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#89631d]">
+                            Missing or weak sections
+                          </p>
+                          <ul className="mt-2 grid gap-1 text-xs leading-5 text-[#725a2d] sm:grid-cols-2">
+                            {enrichment.missing_or_weak_sections.map((section) => (
+                              <li className="flex gap-2" key={section}>
+                                <span aria-hidden="true">-</span>
+                                {section}
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
                     </div>
 
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">

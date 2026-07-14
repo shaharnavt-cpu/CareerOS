@@ -19,8 +19,10 @@ from app.models import (
     CareerFeedbackEvent,
     DiagnosisResult,
     DiagnosisSession,
+    ReviewProposal,
     User,
 )
+from app.schemas.career_memory import CompiledCareerMemoryProfile
 from app.schemas.diagnosis import (
     DiagnosisFocus,
     DiagnosisResultView,
@@ -38,7 +40,15 @@ from app.schemas.diagnosis import (
     OutcomeSignal,
     ProofSprint,
 )
-from app.schemas.knowledge import DEMO_USER_ID, ReviewProposalType
+from app.schemas.knowledge import (
+    DEMO_USER_ID,
+    DurableReviewStatus,
+    ReviewProposalType,
+)
+from app.services.career_memory_compiler import (
+    CareerMemoryCompiler,
+    compiled_profile_factual_text,
+)
 
 
 class DiagnosisNotFoundError(LookupError):
@@ -170,8 +180,14 @@ class CareerDiagnosisService:
         ReviewProposalType.NEEDS_CLASSIFICATION: 0.04,
     }
 
-    def __init__(self, user_id: uuid.UUID = DEMO_USER_ID) -> None:
+    def __init__(
+        self,
+        user_id: uuid.UUID = DEMO_USER_ID,
+        compiler: CareerMemoryCompiler | None = None,
+    ) -> None:
         self.user_id = user_id
+        self.compiler = compiler or CareerMemoryCompiler(user_id=user_id)
+        self._compiled_profiles: dict[uuid.UUID, CompiledCareerMemoryProfile] = {}
 
     def create_and_run(
         self, session: Session, request: DiagnosisSessionCreateRequest
@@ -223,10 +239,31 @@ class CareerDiagnosisService:
 
     def _run_into(self, session: Session, record: DiagnosisSession) -> None:
         memories = session.scalars(
-            select(CanonicalMemoryRecord).where(
-                CanonicalMemoryRecord.user_id == self.user_id
+            select(CanonicalMemoryRecord)
+            .join(
+                ReviewProposal,
+                ReviewProposal.id == CanonicalMemoryRecord.review_proposal_id,
+            )
+            .where(
+                CanonicalMemoryRecord.user_id == self.user_id,
+                ReviewProposal.user_id == self.user_id,
+                ReviewProposal.decision.in_(
+                    (
+                        DurableReviewStatus.APPROVED.value,
+                        DurableReviewStatus.EDITED_APPROVED.value,
+                    )
+                ),
             )
         ).all()
+        self._compiled_profiles = {
+            memory.id: self.compiler.compile(
+                session,
+                memory.id,
+                record.target_role,
+            )
+            for memory in memories
+            if memory.memory_type == "PROJECT"
+        }
         approved_feedback = session.scalars(
             select(CareerFeedbackEvent)
             .where(
@@ -655,15 +692,10 @@ class CareerDiagnosisService:
                 memory
                 for memory in memories
                 if memory.memory_type == "PROJECT"
-                and memory.structured_fields.get("approved_enrichment_ids")
-                and all(
-                    memory.structured_fields.get(key)
-                    for key in (
-                        "enriched_method",
-                        "enriched_data_or_inputs",
-                        "enriched_limitations",
-                    )
-                )
+                and (profile := self._compiled_profiles.get(memory.id)) is not None
+                and profile.enrichment_ids_used
+                and profile.methods
+                and profile.data_or_inputs
             ),
             None,
         )
@@ -984,9 +1016,11 @@ class CareerDiagnosisService:
         }
         return f"{title} supports {descriptions[memory_type]} in {theme_text}."
 
-    @classmethod
-    def _memory_text(cls, memory: CanonicalMemoryRecord) -> str:
-        return " ".join([memory.title, *cls._flatten(memory.structured_fields)])
+    def _memory_text(self, memory: CanonicalMemoryRecord) -> str:
+        profile = self._compiled_profiles.get(memory.id)
+        if profile is not None:
+            return compiled_profile_factual_text(profile)
+        return " ".join([memory.title, *self._flatten(memory.structured_fields)])
 
     @classmethod
     def _flatten(cls, value: Any) -> list[str]:

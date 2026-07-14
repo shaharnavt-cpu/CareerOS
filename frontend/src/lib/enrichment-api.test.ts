@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   convertProposalToEnrichment,
   createEnrichment,
+  isDuplicateEnrichmentError,
   listEnrichments,
   updateEnrichment,
 } from "./enrichment-api.ts";
@@ -45,6 +46,42 @@ test("enrichment API uses create, review, and conversion contracts", async () =>
   }
 });
 
+test("enrichment API preserves actionable duplicate response details", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        detail: {
+          code: "DUPLICATE_ENRICHMENT",
+          message:
+            "This evidence already appears to be saved for this project. No duplicate enrichment was created.",
+          existing_enrichment_id: "enrichment-existing",
+          existing_status: "APPROVED",
+        },
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+
+  try {
+    await assert.rejects(
+      () => createEnrichment("memory-1", "Repeated project evidence"),
+      (error: unknown) => {
+        assert.ok(isDuplicateEnrichmentError(error));
+        assert.equal(error.status, 409);
+        assert.equal(error.existingEnrichmentId, "enrichment-existing");
+        assert.equal(error.existingStatus, "APPROVED");
+        assert.equal(
+          error.message,
+          "This evidence already appears to be saved for this project. No duplicate enrichment was created.",
+        );
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("enrichment route renders the complete reviewed project flow", () => {
   const route = readFileSync(
     new URL("../app/enrichments/page.tsx", import.meta.url),
@@ -73,6 +110,28 @@ test("enrichment route renders the complete reviewed project flow", () => {
   assert.match(workspace, /Rejected enrichment will not affect proof artifacts/);
   assert.match(workspace, /limited project-specific text|abstract, methods/);
   assert.match(workspace, /Regenerate proof artifact/);
+  assert.match(
+    workspace,
+    /This evidence already appears to be saved for this project\. No duplicate enrichment was created\./,
+  );
+  assert.match(
+    workspace,
+    /function changeEnrichmentText\(value: string\)[\s\S]*?setEnrichmentText\(value\);[\s\S]*?setDuplicateWarning\(null\);/,
+  );
+  assert.match(
+    workspace,
+    /changeEnrichmentText\(event\.target\.value\)/,
+  );
+  const duplicateCatch = workspace.slice(
+    workspace.indexOf("} catch (error) {", workspace.indexOf("async function generate")),
+    workspace.indexOf("} finally {", workspace.indexOf("async function generate")),
+  );
+  assert.doesNotMatch(duplicateCatch, /setEnrichmentText\(""\)/);
+  assert.match(workspace, /Matching existing enrichment/);
+  assert.match(workspace, /Approved enrichment used by proof artifacts\./);
+  assert.match(workspace, /Memory quality impact/);
+  assert.match(workspace, /Missing or weak sections/);
+  assert.match(workspace, /Project boundary/);
 });
 
 test("review, dashboard, navigation, and proof link into enrichment", () => {

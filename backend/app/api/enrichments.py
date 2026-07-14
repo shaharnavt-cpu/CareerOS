@@ -17,6 +17,7 @@ from app.schemas.enrichments import (
 from app.schemas.knowledge import DEMO_USER_ID, DurableReviewStatus
 from app.services.memory_enrichment import (
     CareerMemoryEnrichmentService,
+    DuplicateEnrichmentError,
     EnrichmentNotFoundError,
     EnrichmentStateError,
 )
@@ -93,6 +94,16 @@ def create_enrichment(
 ) -> EnrichmentView:
     try:
         return service.create(session, memory_id, request)
+    except DuplicateEnrichmentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "DUPLICATE_ENRICHMENT",
+                "message": str(exc),
+                "existing_enrichment_id": str(exc.existing_enrichment_id),
+                "existing_status": exc.existing_status,
+            },
+        ) from exc
     except EnrichmentNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)

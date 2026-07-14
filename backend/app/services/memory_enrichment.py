@@ -40,6 +40,10 @@ PARSE_QUALITY_WARNING = (
     "CareerOS found limited project-specific text in this source. Paste the "
     "abstract, methods, or results section to enrich this memory."
 )
+DUPLICATE_ENRICHMENT_MESSAGE = (
+    "This evidence already appears to be saved for this project. "
+    "No duplicate enrichment was created."
+)
 
 
 class EnrichmentNotFoundError(LookupError):
@@ -48,6 +52,15 @@ class EnrichmentNotFoundError(LookupError):
 
 class EnrichmentStateError(ValueError):
     """Raised when enrichment would cross the approved-memory boundary."""
+
+
+class DuplicateEnrichmentError(ValueError):
+    """Raised when the same active enrichment is already saved for a memory."""
+
+    def __init__(self, existing: CareerMemoryEnrichment) -> None:
+        super().__init__(DUPLICATE_ENRICHMENT_MESSAGE)
+        self.existing_enrichment_id = existing.id
+        self.existing_status = existing.status
 
 
 class ProjectEnrichmentExtractor:
@@ -180,19 +193,13 @@ class ProjectEnrichmentExtractor:
             methods.remove("modeling")
         if methods:
             existing = fields.get("tools_or_methods")
-            fields["tools_or_methods"] = self._normalized_methods(
-                existing, methods
-            )
-            fields.setdefault(
-                "skills_demonstrated", fields["tools_or_methods"]
-            )
+            fields["tools_or_methods"] = self._normalized_methods(existing, methods)
+            fields.setdefault("skills_demonstrated", fields["tools_or_methods"])
 
         fields = self._future_hooks(fields, memory_title)
         warnings = self._warnings(cleaned, fields)
         existing_warnings = fields.get("warnings_not_to_claim")
-        fields["warnings_not_to_claim"] = self._as_list(
-            existing_warnings, warnings
-        )
+        fields["warnings_not_to_claim"] = self._as_list(existing_warnings, warnings)
         useful = [
             key
             for key in fields
@@ -203,9 +210,7 @@ class ProjectEnrichmentExtractor:
         return fields, list(dict.fromkeys(warnings))
 
     @classmethod
-    def _future_hooks(
-        cls, fields: dict[str, Any], memory_title: str
-    ) -> dict[str, Any]:
+    def _future_hooks(cls, fields: dict[str, Any], memory_title: str) -> dict[str, Any]:
         question = cls._first(fields.get("research_question")) or cls._first(
             fields.get("project_goal")
         )
@@ -430,22 +435,17 @@ class CareerMemoryEnrichmentService:
             select(CareerMemoryEnrichment).where(
                 CareerMemoryEnrichment.user_id == self.user_id,
                 CareerMemoryEnrichment.canonical_memory_id == memory.id,
-                CareerMemoryEnrichment.status == EnrichmentStatus.PROPOSED.value,
+                CareerMemoryEnrichment.status.in_(
+                    (
+                        EnrichmentStatus.PROPOSED.value,
+                        EnrichmentStatus.APPROVED.value,
+                    )
+                ),
                 CareerMemoryEnrichment.structured_enrichment == structured,
             )
         )
         if existing is not None:
-            self._attach_supporting_evidence(
-                existing,
-                evidence_ids=evidence_ids,
-                source_id=source.id if source else request.source_id,
-                source_label=(
-                    request.source_label or (source.label if source else None)
-                ),
-            )
-            session.commit()
-            session.refresh(existing)
-            return self._view(existing, memory)
+            raise DuplicateEnrichmentError(existing)
         record = CareerMemoryEnrichment(
             user_id=self.user_id,
             canonical_memory_id=memory.id,
@@ -491,7 +491,12 @@ class CareerMemoryEnrichmentService:
             select(CareerMemoryEnrichment).where(
                 CareerMemoryEnrichment.user_id == self.user_id,
                 CareerMemoryEnrichment.canonical_memory_id == memory.id,
-                CareerMemoryEnrichment.status == EnrichmentStatus.PROPOSED.value,
+                CareerMemoryEnrichment.status.in_(
+                    (
+                        EnrichmentStatus.PROPOSED.value,
+                        EnrichmentStatus.APPROVED.value,
+                    )
+                ),
                 CareerMemoryEnrichment.structured_enrichment == structured,
             )
         )
@@ -506,6 +511,8 @@ class CareerMemoryEnrichmentService:
                     proposal.source_names[0] if proposal.source_names else None
                 ),
             )
+            if existing.status == EnrichmentStatus.APPROVED.value:
+                self._rebuild_projection(session, memory)
             return existing
         source_id = self._first_uuid(item.source_id for item in proposal.evidence)
         record = CareerMemoryEnrichment(
@@ -589,14 +596,10 @@ class CareerMemoryEnrichmentService:
         source_id: uuid.UUID | None,
         source_label: str | None,
     ) -> None:
-        record.evidence_ids = list(
-            dict.fromkeys([*record.evidence_ids, *evidence_ids])
-        )
+        record.evidence_ids = list(dict.fromkeys([*record.evidence_ids, *evidence_ids]))
         identity_resolution = dict(record.identity_resolution)
         identity_resolution["evidence_ids"] = list(
-            dict.fromkeys(
-                [*identity_resolution.get("evidence_ids", []), *evidence_ids]
-            )
+            dict.fromkeys([*identity_resolution.get("evidence_ids", []), *evidence_ids])
         )
         record.identity_resolution = identity_resolution
         if record.source_id is None and source_id is not None:
@@ -604,9 +607,7 @@ class CareerMemoryEnrichmentService:
         if source_label and record.source_label != source_label:
             record.source_label = " | ".join(
                 dict.fromkeys(
-                    label
-                    for label in (record.source_label, source_label)
-                    if label
+                    label for label in (record.source_label, source_label) if label
                 )
             )
 
@@ -806,11 +807,7 @@ class CareerMemoryEnrichmentService:
     @staticmethod
     def _merge_value(existing: Any, incoming: Any) -> Any:
         existing_values = (
-            existing
-            if isinstance(existing, list)
-            else [existing]
-            if existing
-            else []
+            existing if isinstance(existing, list) else [existing] if existing else []
         )
         incoming_values = incoming if isinstance(incoming, list) else [incoming]
         merged = list(
@@ -851,9 +848,7 @@ class CareerMemoryEnrichmentService:
                 "Only approved canonical Career Memory can be enriched."
             )
 
-    def _memory(
-        self, session: Session, memory_id: uuid.UUID
-    ) -> CanonicalMemoryRecord:
+    def _memory(self, session: Session, memory_id: uuid.UUID) -> CanonicalMemoryRecord:
         memory = session.scalar(
             select(CanonicalMemoryRecord).where(
                 CanonicalMemoryRecord.id == memory_id,
@@ -921,6 +916,53 @@ class CareerMemoryEnrichmentService:
             return "Adds useful project detail, with some proof sections still thin."
         return "Needs more project-specific text before proof readiness improves."
 
+    @staticmethod
+    def _memory_quality_impact(fields: dict[str, Any]) -> list[str]:
+        impacts: list[str] = []
+        has_problem = bool(
+            fields.get("research_question") or fields.get("project_goal")
+        )
+        has_method = bool(
+            fields.get("tools_or_methods") or fields.get("analysis_steps")
+        )
+        has_result = bool(fields.get("findings_or_results"))
+        if has_problem or has_method or has_result:
+            impacts.append("Improves proof artifact")
+        if fields.get("resume_bullet_claims") or (has_problem and has_method):
+            impacts.append("Improves resume bullet readiness")
+        if fields.get("cover_letter_angles") or has_problem:
+            impacts.append("Improves cover letter angle")
+        if has_problem and (has_method or has_result):
+            impacts.append("Improves interview answer")
+        return impacts or ["Needs more project-specific detail"]
+
+    @staticmethod
+    def _missing_or_weak_sections(fields: dict[str, Any]) -> list[str]:
+        rendered = json.dumps(fields, ensure_ascii=False)
+        missing: list[str] = []
+        if not re.search(
+            r"(?<!\w)\d+(?:\.\d+)?\s*(?:%|percent\b|x\b|samples?\b|records?\b)",
+            rendered,
+            re.I,
+        ):
+            missing.append("Need quantified result")
+        if not fields.get("tools_or_methods"):
+            missing.append("Need clearer tool-specific evidence")
+        if not fields.get("outputs") and not re.search(
+            r"https?://|www\.", rendered, re.I
+        ):
+            missing.append("Need output/link")
+        return missing
+
+    @staticmethod
+    def _project_boundary(memory: CanonicalMemoryRecord) -> str:
+        identity = f"{memory.title} {memory.identity_key}".casefold()
+        if re.search(r"\bunicorn\b", identity):
+            return "This belongs to UNICORN, not Gas Kinematics."
+        if "gas" in identity and "kinematic" in identity:
+            return "This belongs to Gas Kinematics, not UNICORN."
+        return f"This belongs only to {memory.title}."
+
     def _view(
         self,
         record: CareerMemoryEnrichment,
@@ -948,6 +990,13 @@ class CareerMemoryEnrichmentService:
             proof_artifact_readiness_impact=self._readiness_impact(
                 record.structured_enrichment
             ),
+            memory_quality_impact=self._memory_quality_impact(
+                record.structured_enrichment
+            ),
+            missing_or_weak_sections=self._missing_or_weak_sections(
+                record.structured_enrichment
+            ),
+            project_boundary=self._project_boundary(memory),
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

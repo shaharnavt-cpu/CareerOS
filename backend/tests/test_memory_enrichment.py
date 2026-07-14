@@ -7,10 +7,13 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.enrichments import get_enrichment_service
 from app.db.session import SessionLocal, engine
+from app.main import app
 from app.models import (
     CanonicalMemoryRecord,
     CareerMemoryEnrichment,
@@ -388,7 +391,7 @@ def test_approve_enrichment_updates_memory_proof_and_diagnosis() -> None:
         assert "Gaussian fitting" in artifact.latest_version.structured_sections[
             "method"
         ]
-        assert "no clear trend" in artifact.latest_version.structured_sections[
+        assert "no clear overall trend" in artifact.latest_version.structured_sections[
             "outcome_or_insight"
         ].casefold()
         assert "conclusive trend" in artifact.latest_version.structured_sections[
@@ -492,6 +495,58 @@ def test_unapproved_memory_cannot_be_enriched() -> None:
                 EnrichmentCreateRequest(enrichment_text=DETAIL),
             )
     finally:
+        _cleanup_user(user_id)
+
+
+def test_duplicate_approved_enrichment_returns_actionable_409() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    memory_id = _seed_memory(user_id)
+    service = CareerMemoryEnrichmentService(user_id=user_id)
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[get_enrichment_service] = lambda: service
+    try:
+        with SessionLocal() as session:
+            proposed = service.create(
+                session,
+                memory_id,
+                EnrichmentCreateRequest(enrichment_text=DETAIL),
+            )
+        with SessionLocal() as session:
+            approved = service.update(
+                session,
+                proposed.id,
+                EnrichmentUpdateRequest(status=EnrichmentStatus.APPROVED),
+            )
+
+        with TestClient(app) as client:
+            duplicate = client.post(
+                f"/api/career-memory/{memory_id}/enrichments",
+                json={"enrichment_text": DETAIL},
+            )
+
+        assert duplicate.status_code == 409
+        detail = duplicate.json()["detail"]
+        assert detail["code"] == "DUPLICATE_ENRICHMENT"
+        assert detail["message"] == (
+            "This evidence already appears to be saved for this project. "
+            "No duplicate enrichment was created."
+        )
+        assert detail["existing_enrichment_id"] == str(approved.id)
+        assert detail["existing_status"] == EnrichmentStatus.APPROVED.value
+
+        with SessionLocal() as session:
+            records = session.scalars(
+                select(CareerMemoryEnrichment).where(
+                    CareerMemoryEnrichment.user_id == user_id,
+                    CareerMemoryEnrichment.canonical_memory_id == memory_id,
+                )
+            ).all()
+        assert len(records) == 1
+        assert records[0].id == approved.id
+        assert records[0].status == EnrichmentStatus.APPROVED.value
+    finally:
+        app.dependency_overrides = original_overrides
         _cleanup_user(user_id)
 
 
