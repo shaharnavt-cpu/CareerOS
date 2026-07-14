@@ -1,11 +1,17 @@
 # CareerOS
 
-CareerOS is an AI-powered career operating system that remembers a user's
-professional journey, reduces repetitive work, and provides evidence-based
-recommendations while keeping the user in control.
+CareerOS is a career-intelligence system that turns reviewed professional
+evidence into reusable, role-specific proof while keeping the user in control.
+It currently includes evidence listening and review, canonical career memory,
+project enrichment, compiled memory profiles, diagnosis, proof artifacts, and
+application intelligence in deterministic local mode.
 
-The project currently includes the project foundation and Career Knowledge
-Engine persistence layer.
+For the current product snapshot, MVP roadmap, intelligence boundaries, and
+Windows development handoff, begin with
+[docs/00-Current-State.md](docs/00-Current-State.md),
+[docs/25-Roadmap-to-MVP.md](docs/25-Roadmap-to-MVP.md),
+[docs/26-Intelligence-Architecture.md](docs/26-Intelligence-Architecture.md),
+and [docs/27-Claude-Code-Handoff.md](docs/27-Claude-Code-Handoff.md).
 
 ## Repository layout
 
