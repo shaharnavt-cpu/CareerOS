@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.applications import get_application_service
@@ -20,6 +20,9 @@ from app.models import (
     ApplicationOpportunity,
     ApplicationQuestion,
     CanonicalMemoryRecord,
+    CareerMemoryEnrichment,
+    ListeningEvidence,
+    ListeningSource,
     ReviewProposal,
     User,
 )
@@ -58,6 +61,11 @@ def _require_postgres() -> None:
 
 def _cleanup_user(user_id: uuid.UUID) -> None:
     with SessionLocal.begin() as session:
+        session.execute(
+            delete(CareerMemoryEnrichment).where(
+                CareerMemoryEnrichment.user_id == user_id
+            )
+        )
         for model in (
             ApplicationDraft,
             ApplicationMemoryMatch,
@@ -67,6 +75,12 @@ def _cleanup_user(user_id: uuid.UUID) -> None:
             ReviewProposal,
         ):
             session.execute(delete(model).where(model.user_id == user_id))
+        session.execute(
+            delete(ListeningEvidence).where(ListeningEvidence.user_id == user_id)
+        )
+        session.execute(
+            delete(ListeningSource).where(ListeningSource.user_id == user_id)
+        )
         session.execute(delete(User).where(User.id == user_id))
 
 
@@ -173,6 +187,75 @@ def _seed_memory(user_id: uuid.UUID) -> dict[str, CanonicalMemoryRecord]:
     return memories
 
 
+def _attach_compiled_project_provenance(
+    user_id: uuid.UUID,
+    memory_id: uuid.UUID,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    with SessionLocal.begin() as session:
+        source = ListeningSource(
+            user_id=user_id,
+            source_type="MANUAL",
+            label="Reviewed Gas Kinematics notes",
+            raw_text="Reviewed capstone methods and findings.",
+            source_metadata={},
+            provenance={},
+            content_hash=f"application-provenance-{user_id}",
+            adapter_version="application-test-v1",
+            status="READY",
+        )
+        session.add(source)
+        session.flush()
+        evidence = ListeningEvidence(
+            user_id=user_id,
+            source_id=source.id,
+            source_type="MANUAL",
+            raw_excerpt=(
+                "Used Python to analyze astronomy datasets and communicate a "
+                "careful no-clear-trend result."
+            ),
+            normalized_excerpt=None,
+            excerpt_hash=f"application-provenance-evidence-{user_id}",
+            category="PROJECT",
+            confidence=Decimal("0.950"),
+            location={},
+            provenance={},
+        )
+        session.add(evidence)
+        session.flush()
+        memory = session.get(CanonicalMemoryRecord, memory_id)
+        assert memory is not None
+        memory.evidence_ids = [str(evidence.id)]
+        memory.source_ids = [str(source.id)]
+        enrichment = CareerMemoryEnrichment(
+            user_id=user_id,
+            canonical_memory_id=memory.id,
+            source_id=source.id,
+            source_label=source.label,
+            status="APPROVED",
+            enrichment_type="PROJECT_FULL_ENRICHMENT",
+            structured_enrichment={
+                "research_question_or_problem": (
+                    "Test whether gas kinematics relates to galaxy morphology."
+                ),
+                "data_or_inputs": ["Astronomy datasets"],
+                "methods": ["Python data analysis and validation"],
+                "findings_or_results": ["No clear overall trend"],
+                "outputs": ["Technical report"],
+            },
+            evidence_ids=[str(evidence.id)],
+            confidence=Decimal("0.940"),
+            reasoning="The user reviewed these details for this exact project.",
+            identity_resolution={
+                "resolution": "ENRICH_EXISTING",
+                "matched_memory_id": str(memory.id),
+            },
+            warnings=[],
+        )
+        session.add(enrichment)
+        session.flush()
+        return evidence.id, enrichment.id
+
+
 def test_opportunity_text_is_parsed_into_skills_themes_and_questions() -> None:
     service = ApplicationIntelligenceService()
 
@@ -207,6 +290,91 @@ def test_matching_uses_approved_memory_and_excludes_rejected_proposals() -> None
         assert opportunity.matches[0].match_score >= opportunity.matches[-1].match_score
         assert any(match.evidence_ids for match in opportunity.matches)
         assert "Reporting" in opportunity.gaps
+    finally:
+        _cleanup_user(user_id)
+
+
+def test_compiled_match_and_draft_keep_provenance_kinds_separate() -> None:
+    _require_postgres()
+    user_id = uuid.uuid4()
+    memories = _seed_memory(user_id)
+    project_id = memories["project"].id
+    evidence_id, enrichment_id = _attach_compiled_project_provenance(
+        user_id,
+        project_id,
+    )
+    service = ApplicationIntelligenceService(user_id=user_id)
+
+    try:
+        with SessionLocal() as session:
+            opportunity = service.create_opportunity(
+                session,
+                ApplicationOpportunityCreateRequest(raw_text=SAMPLE_OPPORTUNITY),
+            )
+            project_match = next(
+                match
+                for match in opportunity.matches
+                if match.canonical_memory_id == project_id
+            )
+
+            assert project_match.evidence_ids == [str(evidence_id)]
+            assert project_match.approved_enrichment_ids == [enrichment_id]
+            assert project_match.memory.evidence_ids == [str(evidence_id)]
+            assert str(enrichment_id) not in project_match.evidence_ids
+            assert str(enrichment_id) not in project_match.memory.evidence_ids
+
+            stored_match = session.scalar(
+                select(ApplicationMemoryMatch).where(
+                    ApplicationMemoryMatch.opportunity_id == opportunity.id,
+                    ApplicationMemoryMatch.question_id.is_(None),
+                    ApplicationMemoryMatch.canonical_memory_id == project_id,
+                )
+            )
+            assert stored_match is not None
+            assert stored_match.evidence_ids == {
+                "schema_version": "application-match-provenance-v1",
+                "listening_evidence_ids": [str(evidence_id)],
+                "approved_enrichment_ids": [str(enrichment_id)],
+                "compiler_version": "career-memory-compiler-v1",
+            }
+
+            # Rows created during the short-lived conflation bug remain readable.
+            stored_match.evidence_ids = [str(evidence_id), str(enrichment_id)]
+            session.commit()
+            legacy_view = service.get_opportunity(session, opportunity.id)
+            legacy_project_match = next(
+                match
+                for match in legacy_view.matches
+                if match.canonical_memory_id == project_id
+            )
+            assert legacy_project_match.evidence_ids == [str(evidence_id)]
+            assert legacy_project_match.approved_enrichment_ids == [enrichment_id]
+
+            draft_response = service.generate_draft(
+                session,
+                opportunity.id,
+                ApplicationDraftRequest(
+                    question_id=opportunity.questions[0].id,
+                    draft_type=ApplicationDraftType.QUESTION_ANSWER,
+                ),
+            )
+
+        assert str(evidence_id) in draft_response.evidence_used
+        assert str(enrichment_id) not in draft_response.evidence_used
+        assert draft_response.approved_enrichment_ids_used == [enrichment_id]
+        assert str(evidence_id) in draft_response.draft.evidence_ids
+        assert str(enrichment_id) not in draft_response.draft.evidence_ids
+        assert draft_response.draft.approved_enrichment_ids == [enrichment_id]
+        assert draft_response.draft.draft_metadata[
+            "approved_enrichment_ids"
+        ] == [str(enrichment_id)]
+        project_draft_match = next(
+            match
+            for match in draft_response.matches_used
+            if match.canonical_memory_id == project_id
+        )
+        assert project_draft_match.evidence_ids == [str(evidence_id)]
+        assert project_draft_match.approved_enrichment_ids == [enrichment_id]
     finally:
         _cleanup_user(user_id)
 

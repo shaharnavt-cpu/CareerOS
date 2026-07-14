@@ -20,6 +20,7 @@ import {
   type ProofTargetAudience,
 } from "@/lib/proof-artifact-api";
 import {
+  artifactMatchesSelection,
   proofArtifactStatusLabel,
   proofArtifactTypeLabel,
   proofAudienceLabel,
@@ -86,6 +87,16 @@ export function ProofArtifactWorkspace({
     () => memories.find((memory) => memory.id === memoryId) ?? null,
     [memories, memoryId],
   );
+  const currentSelection = {
+    memoryId,
+    targetRole,
+    artifactType,
+    targetAudience,
+  };
+  const visibleArtifact =
+    activeArtifact && artifactMatchesSelection(activeArtifact, currentSelection)
+      ? activeArtifact
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -170,10 +181,9 @@ export function ProofArtifactWorkspace({
     setActiveArtifact(updated);
   }
 
-  function startNewArtifact(message: string) {
-    if (!activeArtifact) return;
+  function startNewArtifact() {
     setActiveArtifact(null);
-    setNotice(message);
+    setNotice("Generate a new artifact for the selected memory.");
   }
 
   async function generate() {
@@ -187,18 +197,31 @@ export function ProofArtifactWorkspace({
     }
     setBusy(true);
     setNotice("Packaging approved memory into role-specific proof…");
+    const requestedSelection = {
+      memoryId,
+      targetRole: targetRole.trim(),
+      artifactType,
+      targetAudience,
+    };
     try {
       const artifact = await createProofArtifact({
-        source_memory_id: memoryId,
-        target_role: targetRole.trim(),
-        target_audience: targetAudience,
-        artifact_type: artifactType,
+        source_memory_id: requestedSelection.memoryId,
+        target_role: requestedSelection.targetRole,
+        target_audience: requestedSelection.targetAudience,
+        artifact_type: requestedSelection.artifactType,
         source_diagnosis_result_id:
           memoryId === initialMemoryId &&
           targetRole.trim() === initialTargetRole?.trim()
             ? initialDiagnosisResultId
             : undefined,
       });
+      if (!artifactMatchesSelection(artifact, requestedSelection)) {
+        setActiveArtifact(null);
+        setNotice(
+          "The generated artifact did not match the selected memory and settings. Generate a new artifact for the selected memory.",
+        );
+        return;
+      }
       replaceArtifact(artifact);
       setNotice(
         "Proof artifact saved as a draft. Review its evidence, warnings, and wording before sharing.",
@@ -213,12 +236,25 @@ export function ProofArtifactWorkspace({
   async function regenerate(artifact: ProofArtifact) {
     setBusy(true);
     setNotice("Generating a new version from the same approved memory…");
+    const requestedSelection = {
+      memoryId: artifact.source_memory_id,
+      targetRole: targetRole.trim() || artifact.target_role,
+      artifactType,
+      targetAudience,
+    };
     try {
       const updated = await regenerateProofArtifact(artifact.id, {
-        target_role: targetRole.trim() || artifact.target_role,
-        target_audience: targetAudience,
-        artifact_type: artifactType,
+        target_role: requestedSelection.targetRole,
+        target_audience: requestedSelection.targetAudience,
+        artifact_type: requestedSelection.artifactType,
       });
+      if (!artifactMatchesSelection(updated, requestedSelection)) {
+        setActiveArtifact(null);
+        setNotice(
+          "The regenerated artifact did not match the selected memory and settings. Generate a new artifact for the selected memory.",
+        );
+        return;
+      }
       replaceArtifact(updated);
       setNotice(
         `Version ${updated.latest_version.version_number} saved. The previous version remains in history.`,
@@ -304,10 +340,17 @@ export function ProofArtifactWorkspace({
               Evidence boundary
             </p>
             <p className="mt-2 text-sm leading-6 text-[#45665a]">
-              Factual claims come from approved canonical memory. Outcome notes
-              may guide framing, but remain strategy signals—not proof of skill or
+              Factual claims come from approved canonical memory and approved
+              enrichments for the selected memory. Approved outcome signals may
+              guide framing, but remain strategy-only—not proof of skill or
               causality.
             </p>
+            <Link
+              className="mt-3 inline-flex text-xs font-semibold text-[#2f6b53] underline decoration-[#89b7a0] underline-offset-4"
+              href={`/enrichments${memoryId ? `?memory_id=${memoryId}` : ""}`}
+            >
+              Need richer proof? Add project evidence
+            </Link>
           </div>
         </header>
 
@@ -374,9 +417,7 @@ export function ProofArtifactWorkspace({
                       onChange={(event) => {
                         setMemoryId(event.target.value);
                         if (event.target.value !== activeArtifact?.source_memory_id) {
-                          startNewArtifact(
-                            "Source memory changed. Complete the settings below to generate a new artifact; saved artifacts remain in the list.",
-                          );
+                          startNewArtifact();
                         }
                       }}
                       value={memoryId}
@@ -394,12 +435,11 @@ export function ProofArtifactWorkspace({
                     Target role or program
                     <input
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none ring-[#dceee5] placeholder:text-[#96a39d] focus:ring-4"
+                      disabled={loading || busy}
                       onChange={(event) => {
                         setTargetRole(event.target.value);
                         if (event.target.value !== activeArtifact?.target_role) {
-                          startNewArtifact(
-                            "Target changed. Generate to create a new artifact; the saved artifact remains in the list.",
-                          );
+                          startNewArtifact();
                         }
                       }}
                       placeholder="Data Analytics / AI internship"
@@ -410,13 +450,12 @@ export function ProofArtifactWorkspace({
                     Artifact type
                     <select
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none"
+                      disabled={loading || busy}
                       onChange={(event) => {
                         const nextType = event.target.value as ProofArtifactType;
                         setArtifactType(nextType);
                         if (nextType !== activeArtifact?.artifact_type) {
-                          startNewArtifact(
-                            "Artifact type changed. Generate to create a new artifact; the saved artifact remains in the list.",
-                          );
+                          startNewArtifact();
                         }
                       }}
                       value={artifactType}
@@ -432,13 +471,12 @@ export function ProofArtifactWorkspace({
                     Target channel
                     <select
                       className="mt-2 min-h-12 w-full rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] px-4 font-normal text-[#29483e] outline-none"
+                      disabled={loading || busy}
                       onChange={(event) => {
                         const nextAudience = event.target.value as ProofTargetAudience;
                         setTargetAudience(nextAudience);
                         if (nextAudience !== activeArtifact?.target_audience) {
-                          startNewArtifact(
-                            "Target channel changed. Generate to create a new artifact; the saved artifact remains in the list.",
-                          );
+                          startNewArtifact();
                         }
                       }}
                       value={targetAudience}
@@ -463,17 +501,17 @@ export function ProofArtifactWorkspace({
             </section>
 
             <SavedArtifacts
-              activeId={activeArtifact?.id}
+              activeId={visibleArtifact?.id}
               artifacts={artifacts}
               onChoose={chooseArtifact}
             />
           </aside>
 
-          {activeArtifact ? (
+          {visibleArtifact ? (
             <ArtifactOutput
-              artifact={activeArtifact}
+              artifact={visibleArtifact}
               busy={busy}
-              key={`${activeArtifact.id}-${activeArtifact.latest_version.id}-${activeArtifact.latest_version.updated_at}`}
+              key={`${visibleArtifact.id}-${visibleArtifact.latest_version.id}-${visibleArtifact.latest_version.updated_at}`}
               onRegenerate={regenerate}
               onSave={saveVersion}
               onStatus={changeStatus}
@@ -484,12 +522,12 @@ export function ProofArtifactWorkspace({
                 Diagnosis → Proof Sprint → Proof Artifact
               </p>
               <h2 className="mx-auto mt-3 max-w-xl text-3xl font-semibold text-[#17362d]">
-                Your one-page case study will appear here.
+                Generate a new artifact for the selected memory.
               </h2>
               <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[#6d7e77]">
-                CareerOS will preserve the evidence linkage internally, identify
-                unsupported claims, and create channel-specific variants from the
-                same approved memory.
+                {selectedMemory
+                  ? `${selectedMemory.title} is selected. CareerOS will preserve its evidence boundary and create role-specific proof from that memory only.`
+                  : "Choose an approved memory and role-specific settings to begin."}
               </p>
             </section>
           )}
@@ -723,7 +761,7 @@ function ArtifactOutput({
           </div>
           <button
             className="rounded-full bg-[#214f40] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-            disabled={saving || !dirty || !content.trim()}
+            disabled={busy || saving || !dirty || !content.trim()}
             onClick={() => void save()}
             type="button"
           >
@@ -733,7 +771,7 @@ function ArtifactOutput({
         <textarea
           aria-label="Proof artifact editor"
           className="mt-4 min-h-[460px] w-full resize-y rounded-2xl border border-[#cfdbd4] bg-[#fbfcfa] p-4 font-mono text-sm leading-6 text-[#344e44] outline-none ring-[#dceee5] focus:ring-4"
-          disabled={saving}
+          disabled={busy || saving}
           onChange={(event) => {
             setContent(event.target.value);
             setSaveLabel("Save version edits");

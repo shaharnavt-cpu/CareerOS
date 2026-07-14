@@ -2,8 +2,9 @@
 
 ## What a proof artifact is
 
-A proof artifact is a role-specific work sample built from one approved Career
-Memory. It makes one supported claim easy for an evaluator to recognize:
+A proof artifact is a role-specific work sample built from one compiled,
+approved Career Memory. It makes one supported claim easy for an evaluator to
+recognize:
 
 > This approved memory proves I can do X for this target role.
 
@@ -18,15 +19,24 @@ reuse one evidence trail without producing unrelated drafts.
 
 ## Trust boundary
 
-Factual claims come from the selected `canonical_memory_records` row and its
-linked evidence. A pending, rejected, or otherwise unapproved review proposal is
-not an eligible source.
+Factual claims come from a transient compiled profile for the exact selected
+`canonical_memory_records` row. The Career Memory Compiler combines that
+user-owned approved memory, its linked evidence, and only `APPROVED` enrichment
+records attached to the same memory ID. A pending, rejected, archived, foreign,
+or otherwise unapproved record is not an eligible source.
+
+The selected memory ID is authoritative. Title similarity cannot redirect
+generation or borrow facts from another project. Gas Kinematics and UNICORN may
+share broad astronomy context, but their data, methods, findings, outputs,
+evidence IDs, and enrichment IDs remain separate unless an approved enrichment
+explicitly links the fact to the selected memory.
 
 The builder preserves:
 
 - the source memory ID;
 - the source diagnosis result ID when one is supplied;
 - evidence IDs, source labels, and available evidence excerpts;
+- approved enrichment IDs and compiler version used for the generated snapshot;
 - approved outcome-signal IDs used for strategy guidance;
 - warnings, readiness, generator version, and structured sections.
 
@@ -39,12 +49,17 @@ If no approved memory exists, the API returns:
 
 ## Proof and outcome signals
 
-Canonical Career Memory and outcome feedback serve different purposes:
+Canonical Career Memory, approved enrichment, and outcome feedback serve
+different purposes:
 
 - **Canonical proof** supports factual claims about the user's work, methods,
   skills, inputs, findings, and documented outcomes.
+- **Approved enrichment** adds reviewed, source-backed factual detail to that
+  exact memory. It can strengthen proof without creating another project.
 - **Outcome signals** may suggest that an artifact or framing worked once. They
   can guide how the proof is presented, but they do not prove skill or causality.
+- **Target-role interpretation** changes emphasis and reviewer language. It is
+  derived framing, not factual evidence.
 
 Only approved `ARTIFACT_SUCCESS` feedback events may be included. The event must
 either be captured in the selected diagnosis result or be directly linked to the
@@ -123,6 +138,14 @@ communication when those details appear in approved memory or linked evidence.
 It must not add Python, a dataset name, a result, or a metric merely because such
 a detail would sound plausible.
 
+With richer approved Gas evidence, the compiled profile can produce clean prose
+about supported CEERS/RUBIES inputs, JWST/NIRSpec spectroscopy, JWST/NIRCam
+imaging, GALFIT `b/a`, H-alpha fitting, uncertainty handling, quality cuts, and
+`sigma_gas` versus `b/a`. With approved UNICORN evidence, an AI-targeted artifact
+can instead emphasize image inspection, categorization, t-SNE exploration,
+labeling workflow, data-quality judgment, and technical documentation. The
+builder cannot transfer either project's details into the other artifact.
+
 When no outcome is documented, the artifact says that it demonstrates the
 analytical process and communication of findings and warns against claiming a
 quantified business outcome.
@@ -132,18 +155,31 @@ quantified business outcome.
 `ProofArtifactService` uses generator version
 `local-deterministic-proof-v0`. It does not require an LLM key.
 
-Generation reads:
+Generation first asks the transient Career Memory Compiler to read:
 
 - one user-owned approved canonical memory;
-- linked evidence and source metadata;
+- linked, user-owned evidence and source metadata;
+- only `APPROVED` enrichments attached to that exact memory;
 - a required target role or program;
-- a target audience and artifact type;
-- an optional diagnosis result that references the selected memory;
-- eligible approved outcome signals.
+- eligible approved outcome feedback as strategy signals only.
 
-The service then derives a claim, role relevance, method, limitations,
-structured case-study sections, primary text, and supporting variants. It does
-not mutate Career Memory, diagnosis, evidence, or feedback.
+The builder then combines the compiled profile with a target audience and
+artifact type and, when supplied, an optional diagnosis result that references
+the selected memory. The compiler is deterministic, compile-on-read, and not a
+new persistent source-of-truth table.
+
+The service derives a claim, role relevance, method, limitations, structured
+case-study sections, primary text, reviewer question, and supporting variants
+from the compiled fields. It converts supported facts into clean case-study
+prose instead of dumping raw resume or project text into Problem. It does not
+mutate Career Memory, enrichment, diagnosis, evidence, or feedback.
+
+Sprint 13.1 makes the compiled profile the builder's primary input. Proposed,
+rejected, and archived enrichment cannot influence it. Approved outcome feedback
+is returned separately with a strategy-only, non-causality caveat. Target-role
+text may change interpretation and reviewer wording but cannot introduce a new
+tool, dataset, method, result, or metric. The builder links to `/enrichments`
+when a project needs deeper proof.
 
 ## Readiness and warnings
 
@@ -159,6 +195,11 @@ role-relevant capabilities, and whether an outcome is documented. A memory with
 no evidence cannot score above the needs-evidence range. A missing documented
 outcome prevents the generator from treating the artifact as fully ready.
 
+Compiler-identified gaps remain explicit. Examples include `Need quantified
+result`, `Need clearer tool-specific evidence`, and `Need output/link`. These
+gaps lower readiness or guide enrichment; they are never permission to invent a
+missing fact.
+
 Warnings identify what the user should not claim. Only resolvable, user-owned
 evidence contributes to readiness, even though the saved version preserves the
 source memory's full evidence-ID list for audit. Depending on the source, warnings
@@ -168,6 +209,7 @@ cover:
 - missing documented outcomes;
 - absent approved performance metrics;
 - unsupported tools, datasets, metrics, outcomes, or business impact;
+- unsupported deployment, production-ML, or cross-project claims;
 - the difference between an outcome signal and causal proof.
 
 When edited content adds numeric claims not found in approved memory or its
@@ -195,6 +237,11 @@ the artifact status.
 - warnings, readiness score, and readiness label;
 - supporting variants;
 - created and updated timestamps.
+
+The structured snapshot also preserves the compiler version and the evidence,
+approved enrichment, and outcome-signal references used to create that version.
+The compiled profile itself remains transient and is not a second canonical
+record.
 
 Initial generation creates version 1. Regeneration appends a new version, uses
 the latest approved evidence and feedback, and returns the artifact to `DRAFT`.
@@ -241,10 +288,22 @@ The `/proof-artifacts` workspace lets the user:
 - copy the primary case-study text and supporting variants;
 - open a print-friendly view.
 
-Copied case-study content includes a compact Evidence Used section with source
-labels and evidence IDs. The print view is the v0 path for printing or using the browser's **Save as
-PDF** feature. Sprint 12 does not add a server-side PDF renderer or a hosted
-portfolio platform.
+Memory, target role, artifact type, and target channel define the current draft
+selection. Changing any of them while a saved artifact is open clears the active
+preview or shows a new-draft state:
+
+> Generate a new artifact for the selected memory.
+
+The saved artifact remains in history, but a Gas artifact cannot stay visible as
+if it belongs to a newly selected UNICORN memory. A response generated for an
+older selection must not replace a newer selection if the controls change while
+generation is in flight.
+
+Copied case-study content includes a compact Evidence Used section with readable
+source labels and excerpts; internal evidence IDs remain linked without being
+dumped into user-facing prose. The print view is the v0 path for printing or
+using the browser's **Save as PDF** feature. Sprint 12 does not add a server-side
+PDF renderer or a hosted portfolio platform.
 
 ## Ways to use an artifact
 
@@ -263,6 +322,8 @@ portfolio platform.
 - Readiness measures evidence completeness and draft safety, not employer
   approval or hiring likelihood.
 - Source quality limits artifact quality.
+- Deterministic compiler patterns are bounded and do not understand every
+  project domain.
 - Outcome signals are sparse and cannot establish causality.
 - v0 exposes the latest version rather than a full visual version history.
 - Browser printing is the only PDF path.
@@ -270,4 +331,8 @@ portfolio platform.
 
 Future work may add visual version comparison, selective evidence controls,
 reviewer collaboration, richer templates, accessible branded PDF exports,
-portfolio publishing integrations, and outcome-linked artifact analytics.
+portfolio publishing integrations, and outcome-linked artifact analytics. Sprint
+13.1 already uses compiled project memory in proof, diagnosis, and application
+intelligence, but does not add a full resume or cover-letter generator; it
+exposes safe claim ingredients those future builders can consume under the same
+evidence boundary.

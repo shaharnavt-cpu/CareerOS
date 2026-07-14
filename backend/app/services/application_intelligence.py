@@ -18,6 +18,8 @@ from app.models import (
     ApplicationOpportunity,
     ApplicationQuestion,
     CanonicalMemoryRecord,
+    CareerMemoryEnrichment,
+    ReviewProposal,
     Story,
     StoryEvidence,
     User,
@@ -46,9 +48,15 @@ from app.schemas.applications import (
 from app.schemas.knowledge import (
     DEMO_USER_ID,
     CanonicalReviewMemory,
+    DurableReviewStatus,
     ReviewProposalType,
 )
 from app.schemas.stories import StoryStatus
+from app.services.career_memory_compiler import (
+    CareerMemoryCompiler,
+    compiled_profile_factual_fields,
+    compiled_profile_factual_text,
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +76,9 @@ class MatchCandidate:
     score: float
     reason: str
     themes: list[str]
+    evidence_ids: list[str]
+    approved_enrichment_ids: list[str]
+    compiler_version: str | None
 
 
 @dataclass(frozen=True)
@@ -121,8 +132,13 @@ class ApplicationIntelligenceService:
         "technical rigor": ("model", "statistics", "uncertainty", "analysis"),
     }
 
-    def __init__(self, user_id: uuid.UUID = DEMO_USER_ID) -> None:
+    def __init__(
+        self,
+        user_id: uuid.UUID = DEMO_USER_ID,
+        compiler: CareerMemoryCompiler | None = None,
+    ) -> None:
         self.user_id = user_id
+        self.compiler = compiler or CareerMemoryCompiler(user_id=user_id)
 
     def create_opportunity(
         self, session: Session, request: ApplicationOpportunityCreateRequest
@@ -243,7 +259,7 @@ class ApplicationIntelligenceService:
                     canonical_memory_id=candidate.memory.id,
                     match_score=Decimal(str(round(candidate.score, 3))),
                     match_reason=candidate.reason,
-                    evidence_ids=candidate.memory.evidence_ids,
+                    evidence_ids=self._stored_match_provenance(candidate),
                     themes_matched=candidate.themes,
                 )
             )
@@ -300,6 +316,13 @@ class ApplicationIntelligenceService:
                 for evidence_id in match.evidence_ids
             )
         )
+        approved_enrichment_ids = list(
+            dict.fromkeys(
+                enrichment_id
+                for match in selected_matches
+                for enrichment_id in match.approved_enrichment_ids
+            )
+        )
         prompt = (
             question.question_text
             if question is not None
@@ -323,21 +346,24 @@ class ApplicationIntelligenceService:
                 ],
                 "primary_memory": self._draft_memory_metadata(selection.primary),
                 "supporting_memories": [
-                    self._draft_memory_metadata(match)
-                    for match in selection.supporting
+                    self._draft_memory_metadata(match) for match in selection.supporting
                 ],
                 "question_type": question.question_type if question else None,
                 "evidence_ids": evidence_ids,
+                "approved_enrichment_ids": [
+                    str(item) for item in approved_enrichment_ids
+                ],
                 "gaps": self._gaps(opportunity, selected_matches),
             },
         )
         session.add(draft)
         session.commit()
-        draft_view = self._draft_view(draft)
+        draft_view = self._draft_view(session, draft)
         return ApplicationDraftResponse(
             draft=draft_view,
             matches_used=selected_matches,
             evidence_used=evidence_ids,
+            approved_enrichment_ids_used=approved_enrichment_ids,
         )
 
     def generate_question_draft(
@@ -363,7 +389,7 @@ class ApplicationIntelligenceService:
         if request.status is not None:
             draft.status = request.status.value
         session.commit()
-        return self._draft_view(draft)
+        return self._draft_view(session, draft)
 
     def analyze_text(
         self,
@@ -401,8 +427,20 @@ class ApplicationIntelligenceService:
         question: ApplicationQuestion | None,
     ) -> list[MatchCandidate]:
         memories = session.scalars(
-            select(CanonicalMemoryRecord).where(
-                CanonicalMemoryRecord.user_id == self.user_id
+            select(CanonicalMemoryRecord)
+            .join(
+                ReviewProposal,
+                ReviewProposal.id == CanonicalMemoryRecord.review_proposal_id,
+            )
+            .where(
+                CanonicalMemoryRecord.user_id == self.user_id,
+                ReviewProposal.user_id == self.user_id,
+                ReviewProposal.decision.in_(
+                    (
+                        DurableReviewStatus.APPROVED.value,
+                        DurableReviewStatus.EDITED_APPROVED.value,
+                    )
+                ),
             )
         ).all()
         requirement_labels = self._requirement_labels(opportunity, question)
@@ -410,7 +448,26 @@ class ApplicationIntelligenceService:
         candidates: list[MatchCandidate] = []
         for memory in memories:
             memory_type = ReviewProposalType(memory.memory_type)
-            memory_text = self._memory_text(memory)
+            profile = (
+                self.compiler.compile(session, memory.id, opportunity.title)
+                if memory.memory_type == "PROJECT"
+                else None
+            )
+            memory_text = (
+                compiled_profile_factual_text(profile)
+                if profile is not None
+                else self._memory_text(memory)
+            )
+            evidence_ids = (
+                list(dict.fromkeys(profile.evidence_ids_used))
+                if profile is not None
+                else memory.evidence_ids
+            )
+            approved_enrichment_ids = (
+                [str(item) for item in profile.enrichment_ids_used]
+                if profile is not None
+                else []
+            )
             memory_terms = self._term_set(memory_text)
             themes = self._themes_matched(
                 requirement_labels, requirement_terms, memory_terms, memory_text
@@ -420,16 +477,26 @@ class ApplicationIntelligenceService:
             score = MEMORY_TYPE_WEIGHT.get(memory_type, 0.02)
             score += min(0.36, 0.07 * len(themes))
             score += float(memory.confidence) * 0.12
-            score += 0.06 if memory.evidence_ids else 0
+            score += 0.06 if evidence_ids or approved_enrichment_ids else 0
             score += self._question_type_boost(memory_type, question)
             score = min(score, 0.99)
-            reason = self._match_reason(memory, themes, question)
+            reason = self._match_reason(
+                memory,
+                themes,
+                question,
+                len(evidence_ids) + len(approved_enrichment_ids),
+            )
             candidates.append(
                 MatchCandidate(
                     memory=memory,
                     score=score,
                     reason=reason,
                     themes=themes,
+                    evidence_ids=evidence_ids,
+                    approved_enrichment_ids=approved_enrichment_ids,
+                    compiler_version=(
+                        profile.compiler_version if profile is not None else None
+                    ),
                 )
             )
         return sorted(candidates, key=lambda item: item.score, reverse=True)[:10]
@@ -492,7 +559,7 @@ class ApplicationIntelligenceService:
             gaps=self._gaps(opportunity, match_views),
             questions=[self._question_view(question) for question in questions],
             matches=match_views,
-            drafts=[self._draft_view(draft) for draft in drafts],
+            drafts=[self._draft_view(session, draft) for draft in drafts],
             approved_stories=self._approved_story_context(session),
             created_at=opportunity.created_at,
             updated_at=opportunity.updated_at,
@@ -533,6 +600,13 @@ class ApplicationIntelligenceService:
         memory = session.get(CanonicalMemoryRecord, match.canonical_memory_id)
         if memory is None or memory.user_id != self.user_id:
             raise ApplicationNotFoundError("Matched memory is unavailable.")
+        opportunity = session.get(ApplicationOpportunity, match.opportunity_id)
+        if opportunity is None or opportunity.user_id != self.user_id:
+            raise ApplicationNotFoundError("Matched opportunity is unavailable.")
+        evidence_ids, approved_enrichment_ids = self._match_provenance(
+            session,
+            match,
+        )
         return ApplicationMemoryMatchView(
             id=match.id,
             opportunity_id=match.opportunity_id,
@@ -540,9 +614,35 @@ class ApplicationIntelligenceService:
             canonical_memory_id=match.canonical_memory_id,
             match_score=float(match.match_score),
             match_reason=match.match_reason,
-            evidence_ids=match.evidence_ids,
+            evidence_ids=evidence_ids,
+            approved_enrichment_ids=approved_enrichment_ids,
             themes_matched=match.themes_matched,
-            memory=self._memory_view(memory),
+            memory=self._memory_view_for_target(
+                session,
+                memory,
+                opportunity.title,
+            ),
+        )
+
+    def _memory_view_for_target(
+        self,
+        session: Session,
+        memory: CanonicalMemoryRecord,
+        target_role: str,
+    ) -> CanonicalReviewMemory:
+        if memory.memory_type != "PROJECT":
+            return self._memory_view(memory)
+        profile = self.compiler.compile(session, memory.id, target_role)
+        return CanonicalReviewMemory(
+            id=memory.id,
+            memory_type=ReviewProposalType(memory.memory_type),
+            title=memory.title,
+            structured_fields=compiled_profile_factual_fields(profile),
+            evidence_ids=list(dict.fromkeys(profile.evidence_ids_used)),
+            source_ids=memory.source_ids,
+            confidence=profile.confidence,
+            review_proposal_id=memory.review_proposal_id,
+            updated_at=memory.updated_at,
         )
 
     @staticmethod
@@ -560,7 +660,115 @@ class ApplicationIntelligenceService:
         )
 
     @staticmethod
-    def _draft_view(draft: ApplicationDraft) -> ApplicationDraftView:
+    def _stored_match_provenance(candidate: MatchCandidate) -> dict[str, Any]:
+        """Keep unlike provenance identifiers distinct in the legacy JSONB column."""
+
+        return {
+            "schema_version": "application-match-provenance-v1",
+            "listening_evidence_ids": list(dict.fromkeys(candidate.evidence_ids)),
+            "approved_enrichment_ids": list(
+                dict.fromkeys(candidate.approved_enrichment_ids)
+            ),
+            "compiler_version": candidate.compiler_version,
+        }
+
+    def _match_provenance(
+        self,
+        session: Session,
+        match: ApplicationMemoryMatch,
+    ) -> tuple[list[str], list[str]]:
+        stored = match.evidence_ids
+        if isinstance(stored, dict):
+            evidence_ids = self._string_ids(
+                stored.get("listening_evidence_ids", stored.get("evidence_ids", []))
+            )
+            approved_enrichment_ids = self._string_ids(
+                stored.get(
+                    "approved_enrichment_ids",
+                    stored.get("enrichment_ids", []),
+                )
+            )
+            return (
+                list(dict.fromkeys(evidence_ids)),
+                list(dict.fromkeys(approved_enrichment_ids)),
+            )
+
+        # Sprint 13.1 briefly stored both identifier kinds as an untagged list.
+        # Resolve durable enrichment rows so those legacy values remain readable
+        # without continuing to present enrichment UUIDs as ListeningEvidence IDs.
+        return self._split_legacy_provenance(
+            session,
+            stored,
+            canonical_memory_id=match.canonical_memory_id,
+        )
+
+    def _split_legacy_provenance(
+        self,
+        session: Session,
+        values: Any,
+        *,
+        canonical_memory_id: uuid.UUID | None = None,
+    ) -> tuple[list[str], list[str]]:
+        identifiers = self._string_ids(values)
+        parsed_ids: list[uuid.UUID] = []
+        for identifier in identifiers:
+            try:
+                parsed_ids.append(uuid.UUID(identifier))
+            except (TypeError, ValueError):
+                continue
+        if not parsed_ids:
+            return list(dict.fromkeys(identifiers)), []
+
+        statement = select(CareerMemoryEnrichment.id).where(
+            CareerMemoryEnrichment.user_id == self.user_id,
+            CareerMemoryEnrichment.id.in_(parsed_ids),
+        )
+        if canonical_memory_id is not None:
+            statement = statement.where(
+                CareerMemoryEnrichment.canonical_memory_id == canonical_memory_id
+            )
+        enrichment_ids = {
+            str(item) for item in session.scalars(statement).all()
+        }
+        return (
+            list(
+                dict.fromkeys(
+                    item for item in identifiers if item not in enrichment_ids
+                )
+            ),
+            list(
+                dict.fromkeys(item for item in identifiers if item in enrichment_ids)
+            ),
+        )
+
+    @staticmethod
+    def _string_ids(value: Any) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [str(item) for item in value if item is not None and str(item)]
+
+    def _draft_view(
+        self,
+        session: Session,
+        draft: ApplicationDraft,
+    ) -> ApplicationDraftView:
+        evidence_ids, inferred_enrichment_ids = self._split_legacy_provenance(
+            session,
+            draft.evidence_ids,
+        )
+        draft_metadata = dict(draft.draft_metadata)
+        approved_enrichment_ids = list(
+            dict.fromkeys(
+                [
+                    *self._string_ids(
+                        draft_metadata.get("approved_enrichment_ids", [])
+                    ),
+                    *inferred_enrichment_ids,
+                ]
+            )
+        )
+        draft_metadata["evidence_ids"] = evidence_ids
+        draft_metadata["approved_enrichment_ids"] = approved_enrichment_ids
         return ApplicationDraftView(
             id=draft.id,
             opportunity_id=draft.opportunity_id,
@@ -568,9 +776,10 @@ class ApplicationIntelligenceService:
             draft_type=ApplicationDraftType(draft.draft_type),
             prompt=draft.prompt,
             draft_text=draft.draft_text,
-            evidence_ids=draft.evidence_ids,
+            evidence_ids=evidence_ids,
+            approved_enrichment_ids=approved_enrichment_ids,
             status=ApplicationDraftStatus(draft.status),
-            draft_metadata=draft.draft_metadata,
+            draft_metadata=draft_metadata,
             created_at=draft.created_at,
             updated_at=draft.updated_at,
         )
@@ -1128,9 +1337,7 @@ class ApplicationIntelligenceService:
         )
         memory_type = match.memory.memory_type
         rank_bonus = (
-            0.48 - (order.index(memory_type) * 0.06)
-            if memory_type in order
-            else 0
+            0.48 - (order.index(memory_type) * 0.06) if memory_type in order else 0
         )
         text = self._memory_text_from_view(match.memory).casefold()
         capstone_bonus = (
@@ -1138,7 +1345,11 @@ class ApplicationIntelligenceService:
             if any(term in text for term in ("capstone", "kinematics", "morphology"))
             else 0
         )
-        evidence_bonus = 0.03 if match.evidence_ids else 0
+        evidence_bonus = (
+            0.03
+            if match.evidence_ids or match.approved_enrichment_ids
+            else 0
+        )
         skill_penalty = (
             0.18
             if memory_type is ReviewProposalType.SKILL_SET
@@ -1192,11 +1403,14 @@ class ApplicationIntelligenceService:
             )
         memory_type = match.memory.memory_type
         rank_bonus = (
-            0.22 - (order.index(memory_type) * 0.035)
-            if memory_type in order
+            0.22 - (order.index(memory_type) * 0.035) if memory_type in order else 0
+        )
+        provenance_bonus = (
+            0.02
+            if match.evidence_ids or match.approved_enrichment_ids
             else 0
         )
-        return match.match_score + rank_bonus + (0.02 if match.evidence_ids else 0)
+        return match.match_score + rank_bonus + provenance_bonus
 
     @staticmethod
     def _draft_memory_metadata(
@@ -1209,6 +1423,10 @@ class ApplicationIntelligenceService:
             "title": match.memory.title,
             "type": match.memory.memory_type.value,
             "evidence_count": len(match.evidence_ids),
+            "approved_enrichment_count": len(match.approved_enrichment_ids),
+            "approved_enrichment_ids": [
+                str(item) for item in match.approved_enrichment_ids
+            ],
             "themes_matched": match.themes_matched,
         }
 
@@ -1246,9 +1464,7 @@ class ApplicationIntelligenceService:
             return "approved academic preparation"
         fields = match.memory.structured_fields
         degree = str(fields.get("degree") or "").strip()
-        field = str(
-            fields.get("field_of_study") or fields.get("field") or ""
-        ).strip()
+        field = str(fields.get("field_of_study") or fields.get("field") or "").strip()
         institution = str(
             fields.get("institution_name")
             or fields.get("institution")
@@ -1579,13 +1795,15 @@ class ApplicationIntelligenceService:
         memory: CanonicalMemoryRecord,
         themes: list[str],
         question: ApplicationQuestion | None,
+        evidence_count: int | None = None,
     ) -> str:
         scope = "this question" if question else "this opportunity"
+        count = len(memory.evidence_ids) if evidence_count is None else evidence_count
         return (
             f"{memory.title} matches {scope} through "
             f"{', '.join(themes[:4])}; it is approved Career Memory with "
-            f"{len(memory.evidence_ids)} evidence reference"
-            f"{'' if len(memory.evidence_ids) == 1 else 's'}."
+            f"{count} evidence reference"
+            f"{'' if count == 1 else 's'}."
         )
 
     def _memory_text(self, memory: CanonicalMemoryRecord) -> str:

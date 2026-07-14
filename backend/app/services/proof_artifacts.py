@@ -23,6 +23,10 @@ from app.models import (
     ProofArtifactVersion,
     ReviewProposal,
 )
+from app.schemas.career_memory import (
+    CompiledCareerMemoryProfile,
+    CompiledEvidenceKind,
+)
 from app.schemas.diagnosis import FeedbackEventStatus, FeedbackEventType
 from app.schemas.knowledge import DEMO_USER_ID, DurableReviewStatus
 from app.schemas.proof_artifacts import (
@@ -41,6 +45,10 @@ from app.schemas.proof_artifacts import (
     ProofTargetAudience,
 )
 from app.services.career_diagnosis import CareerFeedbackService
+from app.services.career_memory_compiler import (
+    CareerMemoryCompilationError,
+    CareerMemoryCompiler,
+)
 
 
 class ProofArtifactNotFoundError(LookupError):
@@ -70,8 +78,13 @@ class ProofArtifactService:
 
     generator_version = "local-deterministic-proof-v0"
 
-    def __init__(self, user_id: uuid.UUID = DEMO_USER_ID) -> None:
+    def __init__(
+        self,
+        user_id: uuid.UUID = DEMO_USER_ID,
+        compiler: CareerMemoryCompiler | None = None,
+    ) -> None:
         self.user_id = user_id
+        self.compiler = compiler or CareerMemoryCompiler(user_id=user_id)
 
     def list_eligible_memories(self, session: Session) -> list[ProofMemoryOption]:
         memories = session.scalars(
@@ -94,16 +107,15 @@ class ProofArtifactService:
         ).all()
         options: list[ProofMemoryOption] = []
         for memory in memories:
-            references = self._evidence_references(
-                session, memory.evidence_ids, memory.source_ids
-            )
+            profile = self.compiler.compile(session, memory.id)
+            references = self._compiled_evidence_references(profile)
             options.append(
                 ProofMemoryOption(
                     id=memory.id,
                     title=memory.title,
                     memory_type=memory.memory_type,
                     evidence_count=len(references),
-                    evidence_ids=memory.evidence_ids,
+                    evidence_ids=profile.evidence_ids_used,
                     source_labels=list(
                         dict.fromkeys(item["source_label"] for item in references)
                     ),
@@ -274,7 +286,14 @@ class ProofArtifactService:
         if request.structured_sections is not None:
             protected_sections = {
                 key: version.structured_sections.get(key)
-                for key in ("evidence_used", "outcome_signals", "generator_version")
+                for key in (
+                    "compiled_profile",
+                    "enrichment_ids_used",
+                    "evidence_used",
+                    "generator_version",
+                    "outcome_signal_ids_used",
+                    "outcome_signals",
+                )
             }
             version.structured_sections = {
                 **version.structured_sections,
@@ -332,14 +351,38 @@ class ProofArtifactService:
                 )
 
         memory = self._get_source_memory(session, artifact.source_memory_id)
-        approved_text = self._approved_text(session, memory)
-        evidence_references = self._evidence_references(
-            session, memory.evidence_ids, memory.source_ids
-        )
+        compiled_profile: CompiledCareerMemoryProfile | None = None
+        try:
+            compiled_profile = self.compiler.compile(
+                session,
+                memory.id,
+                artifact.target_role,
+            )
+            approved_text = self._compiled_factual_text(compiled_profile)
+            evidence_references = self._compiled_evidence_references(compiled_profile)
+        except CareerMemoryCompilationError:
+            stored_profile = version.structured_sections.get("compiled_profile")
+            approved_text = (
+                json.dumps(stored_profile, ensure_ascii=False)
+                if isinstance(stored_profile, dict)
+                else self._approved_text(session, memory)
+            )
+            stored_references = version.structured_sections.get("evidence_used")
+            evidence_references = (
+                stored_references if isinstance(stored_references, list) else []
+            )
         editable_sections = {
             key: value
             for key, value in version.structured_sections.items()
-            if key not in {"evidence_used", "outcome_signals", "generator_version"}
+            if key
+            not in {
+                "compiled_profile",
+                "enrichment_ids_used",
+                "evidence_used",
+                "generator_version",
+                "outcome_signal_ids_used",
+                "outcome_signals",
+            }
         }
         edited_text = " ".join(
             (
@@ -379,7 +422,11 @@ class ProofArtifactService:
         else:
             capabilities = self._capabilities(approved_text)
             method = self._text_section(version.structured_sections, "method") or ""
-            documented_outcome = self._documented_outcome(memory.structured_fields)
+            documented_outcome = (
+                self._compiled_outcome(compiled_profile)
+                if compiled_profile is not None
+                else self._documented_outcome(memory.structured_fields)
+            )
             score, label = self._readiness(
                 len(evidence_references),
                 version.claim,
@@ -404,51 +451,84 @@ class ProofArtifactService:
         artifact_type: ProofArtifactType,
         diagnosis: DiagnosisResult | None,
     ) -> GeneratedProof:
-        evidence_references = self._evidence_references(
-            session, memory.evidence_ids, memory.source_ids
+        profile = self.compiler.compile(session, memory.id, target_role)
+        evidence_references = self._compiled_evidence_references(profile)
+        approved_text = self._compiled_factual_text(profile)
+        capabilities = (
+            self._capabilities(approved_text)
+            if profile.methods or profile.skills_demonstrated
+            else []
         )
-        approved_text = self._approved_text(
-            session, memory, evidence_references=evidence_references
-        )
-        capabilities = self._capabilities(approved_text)
-        documented_outcome = self._documented_outcome(memory.structured_fields)
+        documented_outcome = self._compiled_outcome(profile)
         outcome_signals = self._outcome_signals(session, memory, diagnosis)
-        title = self._case_study_title(memory, target_role, approved_text)
+        title = self._compiled_title(profile, target_role, approved_text)
         claim = self._target_claim(memory, target_role, capabilities)
-        method = self._method(memory, capabilities, approved_text)
-        problem = self._problem(memory, evidence_references, approved_text)
-        data_or_inputs = self._data_or_inputs(memory, approved_text)
-        outcome_or_insight = documented_outcome or self._outcome_or_insight(
-            capabilities, approved_text
+        method = self._compiled_method(profile)
+        problem = self._compiled_problem(profile)
+        data_or_inputs = self._compiled_data_or_inputs(profile)
+        outcome_or_insight = self._compiled_outcome_or_insight(
+            profile,
+            capabilities,
+            approved_text,
+        )
+        role_relevance = profile.role_relevance or self._role_relevance(
+            target_role, capabilities
+        )
+        limitations = self._compiled_limitations(profile)
+        what_this_proves = self._compiled_what_this_proves(
+            profile,
+            memory,
+            target_role,
+            capabilities,
+            approved_text,
+        )
+        context = self._compiled_context(
+            profile,
+            self._context(memory, capabilities, approved_text),
         )
         sections: dict[str, Any] = {
             "title": title,
             "target_claim": claim,
-            "role_relevance": self._role_relevance(target_role, capabilities),
-            "context": self._context(memory, capabilities, approved_text),
+            "role_relevance": role_relevance,
+            "context": context,
             "problem": problem,
             "data_or_inputs": data_or_inputs,
             "method": method,
             "evidence_used": evidence_references,
             "skills_demonstrated": capabilities,
             "outcome_or_insight": outcome_or_insight,
-            "limitations": self._limitations(
-                len(evidence_references), documented_outcome
-            ),
-            "what_this_proves": self._what_this_proves(
-                memory, target_role, capabilities, approved_text
-            ),
+            "limitations": limitations,
+            "what_this_proves": what_this_proves,
             "how_to_use": self._how_to_use(target_audience),
-            "reviewer_question": self._reviewer_question(target_role),
+            "reviewer_question": self._reviewer_question(
+                target_role,
+                artifact_type,
+                self._reviewer_project_kind(profile, capabilities),
+            ),
             "outcome_signals": outcome_signals,
+            "compiled_profile": profile.model_dump(mode="json"),
+            "enrichment_ids_used": [str(item) for item in profile.enrichment_ids_used],
+            "outcome_signal_ids_used": [
+                str(item) for item in profile.outcome_signal_ids_used
+            ],
             "generator_version": self.generator_version,
         }
         warnings = self._warnings(
             len(evidence_references),
-            self._has_documented_metric(memory.structured_fields, approved_text),
+            self._has_documented_metric({}, approved_text),
             documented_outcome,
             outcome_signals,
         )
+        profile_warnings = [
+            (
+                "Do not claim methods or findings from another project."
+                if profile.project_kind == "UNICORN"
+                and "gas kinematics" in warning.casefold()
+                else warning
+            )
+            for warning in profile.warnings_not_to_claim
+        ]
+        warnings = list(dict.fromkeys([*warnings, *profile_warnings]))
         readiness_score, readiness_label = self._readiness(
             len(evidence_references),
             claim,
@@ -467,7 +547,7 @@ class ProofArtifactService:
             problem,
             data_or_inputs,
             sections["what_this_proves"],
-            sections["limitations"],
+            limitations,
         )
         case_study_content = self._render_case_study(sections)
         content = self._primary_content(artifact_type, case_study_content, variants)
@@ -476,7 +556,7 @@ class ProofArtifactService:
             claim=claim,
             content=content,
             sections=sections,
-            evidence_ids=memory.evidence_ids,
+            evidence_ids=profile.evidence_ids_used,
             outcome_signal_ids=[item["feedback_event_id"] for item in outcome_signals],
             warnings=warnings,
             readiness_score=readiness_score,
@@ -588,11 +668,337 @@ class ProofArtifactService:
         )
 
     @staticmethod
+    def _compiled_evidence_references(
+        profile: CompiledCareerMemoryProfile,
+    ) -> list[dict[str, str | None]]:
+        """Render compiler provenance without counting the memory row as a source."""
+
+        references: list[dict[str, str | None]] = []
+        seen: set[str] = set()
+        for item in profile.evidence_used:
+            if item.kind is CompiledEvidenceKind.CANONICAL_MEMORY:
+                continue
+            if item.evidence_id in seen:
+                continue
+            seen.add(item.evidence_id)
+            references.append(
+                {
+                    "evidence_id": item.evidence_id,
+                    "source_label": item.source_label,
+                    "excerpt": item.excerpt,
+                }
+            )
+        return references
+
+    @staticmethod
+    def _compiled_factual_text(profile: CompiledCareerMemoryProfile) -> str:
+        """Build keyword input from factual compiler buckets, never target context."""
+
+        factual = {
+            "research_question_or_problem": profile.research_question_or_problem,
+            "data_or_inputs": profile.data_or_inputs,
+            "methods": profile.methods,
+            "tools": profile.tools,
+            "workflow_steps": profile.workflow_steps,
+            "findings_or_results": profile.findings_or_results,
+            "limitations": profile.limitations,
+            "outputs": profile.outputs,
+            "collaborators_or_context": profile.collaborators_or_context,
+            "skills_demonstrated": profile.skills_demonstrated,
+            "proof_claims": profile.proof_claims,
+            "resume_bullet_claims": profile.resume_bullet_claims,
+        }
+        return json.dumps(factual, ensure_ascii=False)
+
+    @classmethod
+    def _compiled_title(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        target_role: str,
+        approved_text: str,
+    ) -> str:
+        target = target_role.casefold()
+        if (
+            profile.project_kind == "GAS_KINEMATICS"
+            and re.search(r"\bdata scientist\b", target)
+            and cls._is_rich_gas_profile(profile)
+        ):
+            return (
+                "Data Science Case Study: Testing Galaxy Morphology with JWST "
+                "Spectroscopy and Imaging"
+            )
+        if (
+            profile.project_kind == "UNICORN"
+            and cls._is_ai_target(target_role)
+            and cls._is_rich_unicorn_profile(profile)
+        ):
+            return (
+                "AI/Data Workflow Case Study: Image Inspection and Categorization "
+                "in the UNICORN Project"
+            )
+        approved = approved_text.casefold()
+        if cls._is_analytics_target(target_role):
+            if (
+                "spectral" in approved
+                and "imaging" in approved
+                and "morpholog" in approved
+                and re.search(r"\bgalax(?:y|ies)\b", approved)
+            ):
+                return (
+                    "Data Analytics Case Study: Modeling Galaxy Morphology from "
+                    "Spectral and Imaging Data"
+                )
+            return f"Data Analytics Case Study: {profile.canonical_title}"
+        if cls._is_ai_target(target_role):
+            return f"AI / Automation Proof Case Study: {profile.canonical_title}"
+        return f"Role-Specific Case Study: {profile.canonical_title}"
+
+    @staticmethod
+    def _is_rich_gas_profile(profile: CompiledCareerMemoryProfile) -> bool:
+        text = " ".join(
+            [*profile.data_or_inputs, *profile.methods, *profile.tools]
+        ).casefold()
+        return (
+            "nirspec" in text
+            and "nircam" in text
+            and ("h-alpha" in text or "galfit" in text)
+        )
+
+    @staticmethod
+    def _is_rich_unicorn_profile(profile: CompiledCareerMemoryProfile) -> bool:
+        methods = set(profile.methods)
+        inputs = " ".join(profile.data_or_inputs).casefold()
+        return bool(
+            re.search(r"image|imag|fits|inspection plot|detection", inputs)
+            and "categorization and labeling" in methods
+            and methods.intersection(
+                {
+                    "manual inspection of plots and images",
+                    "detection review",
+                }
+            )
+            and methods.intersection(
+                {
+                    "t-SNE exploratory organization",
+                    "visual-feature grouping and sorting",
+                }
+            )
+        )
+
+    @classmethod
+    def _compiled_method(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str:
+        if profile.project_kind == "GAS_KINEMATICS" and cls._is_rich_gas_profile(
+            profile
+        ):
+            steps = profile.workflow_steps or profile.methods
+            if steps:
+                return " ".join(steps)
+        if profile.project_kind == "UNICORN" and cls._is_rich_unicorn_profile(
+            profile
+        ):
+            return (
+                "The workflow combined "
+                f"{cls._join(profile.methods)} to organize and review the supported "
+                "image data."
+            )
+        if profile.methods:
+            return f"The documented workflow used {cls._join(profile.methods)}."
+        if profile.workflow_steps:
+            return (
+                "The documented workflow included "
+                f"{cls._join(profile.workflow_steps)}"
+            )
+        return (
+            "The approved evidence does not yet describe a method clearly enough "
+            "for this work sample."
+        )
+
+    @classmethod
+    def _compiled_problem(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str:
+        problem = profile.research_question_or_problem
+        if problem and profile.project_kind == "GAS_KINEMATICS":
+            compiled = " ".join(
+                [problem, *profile.data_or_inputs, *profile.methods]
+            ).casefold()
+            has_spectral_and_imaging = (
+                "spectral" in compiled and "imaging" in compiled
+            )
+            if has_spectral_and_imaging and "morpholog" in compiled:
+                if "rotational" in compiled and "velocity dispersion" in compiled:
+                    return (
+                        "The project tested whether spectral and imaging data could "
+                        "be used to study relationships between galaxy morphology "
+                        "and rotational velocity dispersion."
+                    )
+                if "kinematic" in compiled:
+                    return (
+                        "The project tested how spectral and imaging observations "
+                        "could be used to study relationships between galaxy "
+                        "morphology and kinematics."
+                    )
+        if problem:
+            return problem
+        return (
+            "The approved evidence does not yet state the project question or "
+            "problem clearly enough for this work sample."
+        )
+
+    @classmethod
+    def _compiled_data_or_inputs(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str:
+        if profile.data_or_inputs:
+            return f"The project used {cls._join(profile.data_or_inputs)}."
+        return (
+            "The approved evidence does not yet describe the project inputs in "
+            "enough detail for this work sample."
+        )
+
+    @classmethod
+    def _compiled_outcome_or_insight(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        capabilities: list[str],
+        approved_text: str,
+    ) -> str:
+        finding = cls._compiled_outcome(profile)
+        if profile.project_kind == "GAS_KINEMATICS" and finding:
+            return (
+                f"{finding} The artifact presents this as careful hypothesis testing "
+                "rather than failure and does not force the evidence into a "
+                "conclusive claim."
+            )
+        if profile.project_kind == "UNICORN" and cls._is_rich_unicorn_profile(
+            profile
+        ):
+            if finding:
+                return finding
+            return (
+                "The supported evidence documents an image-review and data-quality "
+                "workflow; it does not yet support a quantified outcome."
+            )
+        if finding:
+            return finding
+        if capabilities:
+            return cls._outcome_or_insight(capabilities, approved_text)
+        return (
+            "The approved evidence does not yet document a supported finding or "
+            "outcome."
+        )
+
+    @classmethod
+    def _compiled_outcome(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str | None:
+        if not profile.findings_or_results:
+            return None
+        return " ".join(item.rstrip(". ") + "." for item in profile.findings_or_results)
+
+    @classmethod
+    def _compiled_limitations(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str:
+        if profile.limitations:
+            return " ".join(item.rstrip(". ") + "." for item in profile.limitations)
+        findings = " ".join(profile.findings_or_results).casefold()
+        if profile.project_kind == "GAS_KINEMATICS" and (
+            "no clear" in findings or "inconclusive" in findings
+        ):
+            return (
+                "The approved evidence does not support a conclusive trend; the "
+                "result should be presented as bounded, inconclusive analysis."
+            )
+        return (
+            "The approved evidence does not yet document project limitations in "
+            "enough detail for a final work sample."
+        )
+
+    @classmethod
+    def _compiled_context(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        fallback: str,
+    ) -> str:
+        if profile.project_kind not in {"GAS_KINEMATICS", "UNICORN"}:
+            return fallback
+        # The compiler retains an explicit negative boundary for provenance and
+        # safeguards. Case-study prose should describe the selected project itself,
+        # without introducing the other project's name as if it were project detail.
+        boundary = re.sub(
+            r"\s*Separate from (?:Gas Kinematics|UNICORN)\.?",
+            "",
+            profile.project_boundary,
+            flags=re.IGNORECASE,
+        ).strip()
+        normalized_boundary = boundary.casefold()
+        context_items: list[str] = []
+        for item in profile.collaborators_or_context:
+            normalized = item.casefold()
+            if "gas kinematics" in normalized or "unicorn" in normalized:
+                continue
+            if (
+                "honors capstone" in normalized_boundary
+                and "honors capstone" in normalized
+            ):
+                continue
+            if "gevip" in normalized_boundary and "gevip" in normalized:
+                continue
+            context_items.append(item.rstrip(". ") + ".")
+        return " ".join(item for item in (boundary, *context_items) if item)
+
+    @classmethod
+    def _compiled_what_this_proves(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        memory: CanonicalMemoryRecord,
+        target_role: str,
+        capabilities: list[str],
+        approved_text: str,
+    ) -> str:
+        if profile.project_kind == "GAS_KINEMATICS" and cls._is_rich_gas_profile(
+            profile
+        ):
+            return (
+                "This case study shows the ability to debug messy data, test "
+                "hypotheses, validate assumptions, reason about uncertainty, and "
+                "communicate a nuanced result without overclaiming."
+            )
+        if profile.project_kind == "UNICORN" and cls._is_rich_unicorn_profile(
+            profile
+        ):
+            return (
+                "This case study shows image-data quality judgment, labeling and "
+                "categorization workflow thinking, exploratory ML reasoning, and "
+                "human-in-the-loop review without claiming a deployed model."
+            )
+        if not capabilities and not profile.skills_demonstrated:
+            return (
+                "Approved evidence is not yet detailed enough to support a "
+                f"role-specific capability claim for {target_role}."
+            )
+        return cls._what_this_proves(
+            memory,
+            target_role,
+            capabilities,
+            approved_text,
+        )
+
+    @staticmethod
     def _capabilities(approved_text: str) -> list[str]:
         text = approved_text.casefold()
         rules = [
             ("data analysis", ("data analysis", "analyz", "analys", "dataset")),
             ("Python", ("python",)),
+            ("Gaussian fitting", ("gaussian fit", "gaussian fitting")),
             (
                 "statistical modeling",
                 (
@@ -613,6 +1019,22 @@ class ProofArtifactService:
                 ("presented", "presentation", "conference", "communicat", "poster"),
             ),
             ("research reasoning", ("research", "hypothesis", "investigat")),
+            (
+                "image inspection",
+                ("image inspection", "inspection of plots and images"),
+            ),
+            ("detection review", ("detection review", "reviewed detections")),
+            (
+                "labeling and categorization",
+                ("categorization and labeling", "labeling workflow"),
+            ),
+            ("t-SNE exploration", ("t-sne", "t-distributed stochastic")),
+            (
+                "data-quality judgment",
+                ("data quality", "data-quality", "hot pixels", "spurious detections"),
+            ),
+            ("human-in-the-loop review", ("human-in-the-loop",)),
+            ("technical documentation", ("technical documentation",)),
         ]
         capabilities = [
             label for label, terms in rules if any(term in text for term in terms)
@@ -631,12 +1053,22 @@ class ProofArtifactService:
         phrases = {
             "data analysis": "analyze complex data",
             "Python": "use Python",
+            "Gaussian fitting": "apply Gaussian fitting",
             "statistical modeling": "apply statistical modeling",
             "modeling": "apply modeling",
             "uncertainty and error propagation": "reason about uncertainty",
             "data visualization": "make findings visually inspectable",
             "technical communication": "communicate technical findings clearly",
             "research reasoning": "structure evidence-based research questions",
+            "image inspection": "inspect image data carefully",
+            "detection review": "review detection candidates",
+            "labeling and categorization": (
+                "design labeling and categorization workflows"
+            ),
+            "t-SNE exploration": "use t-SNE for exploratory organization",
+            "data-quality judgment": "reason about data quality",
+            "human-in-the-loop review": "support human-in-the-loop review",
+            "technical documentation": "document technical workflows",
         }
         supported = [phrases[item] for item in capabilities if item in phrases][:4]
         if not supported:
@@ -658,6 +1090,7 @@ class ProofArtifactService:
     ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_method",
             "method",
             "methods",
             "methodology",
@@ -680,6 +1113,7 @@ class ProofArtifactService:
             phrases.extend(
                 phrase
                 for capability, phrase in (
+                    ("Gaussian fitting", "Gaussian fitting"),
                     (
                         "uncertainty and error propagation",
                         "uncertainty and error propagation",
@@ -715,6 +1149,7 @@ class ProofArtifactService:
     ) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_problem",
             "problem",
             "objective",
             "research_question",
@@ -753,6 +1188,7 @@ class ProofArtifactService:
     def _data_or_inputs(cls, memory: CanonicalMemoryRecord, approved_text: str) -> str:
         direct = cls._field_text(
             memory.structured_fields,
+            "enriched_data_or_inputs",
             "data",
             "dataset",
             "datasets",
@@ -790,6 +1226,9 @@ class ProofArtifactService:
         capabilities: list[str],
         approved_text: str,
     ) -> str:
+        enriched = cls._field_text(memory.structured_fields, "enriched_context")
+        if enriched:
+            return enriched
         if cls._is_galaxy_analytics_case(approved_text):
             project_kind = (
                 "This honors capstone"
@@ -840,8 +1279,15 @@ class ProofArtifactService:
 
     @staticmethod
     def _limitations(
-        resolved_evidence_count: int, documented_outcome: str | None
+        memory: CanonicalMemoryRecord,
+        resolved_evidence_count: int,
+        documented_outcome: str | None,
     ) -> str:
+        enriched = ProofArtifactService._field_text(
+            memory.structured_fields, "enriched_limitations"
+        )
+        if enriched:
+            return enriched
         if not resolved_evidence_count:
             return (
                 "The current draft needs a source that documents the method or result "
@@ -927,12 +1373,71 @@ class ProofArtifactService:
         ]
 
     @staticmethod
-    def _reviewer_question(target_role: str) -> str:
-        if ProofArtifactService._is_analytics_target(
+    def _reviewer_question(
+        target_role: str,
+        artifact_type: ProofArtifactType,
+        project_kind: str,
+    ) -> str:
+        if artifact_type is ProofArtifactType.RESUME_BULLETS:
+            return (
+                "Does each resume bullet make the supported method and role-relevant "
+                "skill clear without adding an unsupported outcome?"
+            )
+        if artifact_type is ProofArtifactType.GITHUB_README:
+            return (
+                "Can a reviewer understand the problem, inputs, workflow, and "
+                "limitations from the README in the first 30 seconds?"
+            )
+        if project_kind == "GAS_KINEMATICS" and (
+            ProofArtifactService._is_analytics_target(target_role)
+        ):
+            return (
+                "Is it clear in the first 30 seconds that this project demonstrates "
+                "data cleaning, modeling, validation, and uncertainty reasoning?"
+            )
+        if project_kind == "UNICORN" and ProofArtifactService._is_ai_target(
             target_role
-        ) or ProofArtifactService._is_ai_target(target_role):
-            return "Is the analytics value clear in the first 30 seconds?"
+        ):
+            return (
+                "Is it clear in the first 30 seconds that this project demonstrates "
+                "data-quality and labeling workflow thinking for AI systems?"
+            )
+        if project_kind == "SPARSE":
+            return (
+                "Which approved problem, method, or result detail should be added "
+                "before this artifact makes a role-specific capability claim?"
+            )
+        if project_kind == "GENERIC":
+            return "Is the supported role-relevant value clear in the first 30 seconds?"
+        if ProofArtifactService._is_ai_target(target_role):
+            return (
+                "Is the supported AI workflow, data-quality judgment, and human "
+                "review value clear in the first 30 seconds?"
+            )
+        if ProofArtifactService._is_analytics_target(target_role):
+            return (
+                "Is the supported data preparation, analysis, validation, and "
+                "communication value clear in the first 30 seconds?"
+            )
         return "Is the role-relevant value clear in the first 30 seconds?"
+
+    @classmethod
+    def _reviewer_project_kind(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        capabilities: list[str],
+    ) -> str:
+        if not capabilities and not profile.methods:
+            return "SPARSE"
+        if profile.project_kind == "GAS_KINEMATICS" and cls._is_rich_gas_profile(
+            profile
+        ):
+            return "GAS_KINEMATICS"
+        if profile.project_kind == "UNICORN" and cls._is_rich_unicorn_profile(
+            profile
+        ):
+            return "UNICORN"
+        return "GENERIC"
 
     @classmethod
     def _case_study_title(
@@ -1001,6 +1506,40 @@ class ProofArtifactService:
         what_this_proves: str,
         limitations: str,
     ) -> dict[str, Any]:
+        if not capabilities:
+            return {
+                "resume_bullets": [
+                    (
+                        "Add an approved method before converting this project into "
+                        "a resume bullet."
+                    ),
+                    (
+                        "Add an approved result before making an outcome or impact "
+                        "claim."
+                    ),
+                ],
+                "cover_letter_paragraph": (
+                    f"{memory.title} is documented, but the approved evidence does "
+                    "not yet support using it as a role-specific capability example."
+                ),
+                "outreach_blurb": (
+                    f"I am refining the evidence for {memory.title} before sharing "
+                    "it as a role-specific work sample."
+                ),
+                "interview_answer": (
+                    f"I would not use {memory.title} as an interview example until "
+                    "the approved problem, method, and result are documented."
+                ),
+                "github_readme_outline": (
+                    f"# {memory.title}\n\n"
+                    f"## Problem\n{problem}\n\n"
+                    f"## Data or inputs\n{data_or_inputs}\n\n"
+                    f"## Approach\n{method}\n\n"
+                    f"## Key takeaway\n{outcome}\n\n"
+                    f"## Limitations\n{limitations}\n\n"
+                    f"## Role-specific claim\n{what_this_proves}"
+                ),
+            }
         skills = (
             cls._join(capabilities[:4]) if capabilities else "documented project work"
         )
@@ -1254,21 +1793,37 @@ class ProofArtifactService:
         if ProofArtifactService._is_analytics_target(target_role):
             relevant = {
                 "data analysis",
+                "Gaussian fitting",
                 "statistical modeling",
                 "modeling",
                 "uncertainty and error propagation",
                 "data visualization",
                 "technical communication",
+                "technical documentation",
                 "research reasoning",
+                "image inspection",
+                "detection review",
+                "labeling and categorization",
+                "t-SNE exploration",
+                "data-quality judgment",
+                "human-in-the-loop review",
             }
         elif ProofArtifactService._is_ai_target(target_role):
             relevant = {
                 "data analysis",
                 "Python",
+                "Gaussian fitting",
                 "statistical modeling",
                 "modeling",
                 "technical communication",
+                "technical documentation",
                 "research reasoning",
+                "image inspection",
+                "detection review",
+                "labeling and categorization",
+                "t-SNE exploration",
+                "data-quality judgment",
+                "human-in-the-loop review",
             }
         else:
             return capabilities
@@ -1278,6 +1833,7 @@ class ProofArtifactService:
     def _documented_outcome(cls, fields: dict[str, Any]) -> str | None:
         return cls._field_text(
             fields,
+            "enriched_findings",
             "outcome",
             "outcomes",
             "result",
@@ -1331,6 +1887,22 @@ class ProofArtifactService:
                 if found:
                     return found
         return None
+
+    @classmethod
+    def _field_values(cls, fields: dict[str, Any], *keys: str) -> list[str]:
+        wanted = {key.casefold().replace("_", " ") for key in keys}
+        for key, value in fields.items():
+            normalized = key.casefold().replace("_", " ")
+            if normalized not in wanted:
+                continue
+            values = value if isinstance(value, list) else [value]
+            return [str(item).strip() for item in values if str(item).strip()]
+        for value in fields.values():
+            if isinstance(value, dict):
+                found = cls._field_values(value, *keys)
+                if found:
+                    return found
+        return []
 
     @staticmethod
     def _render_value(value: Any) -> str | None:

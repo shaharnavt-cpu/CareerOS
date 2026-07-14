@@ -328,8 +328,9 @@ def test_create_case_study_uses_approved_gas_memory_without_inventing_python() -
             "to study relationships between galaxy morphology and kinematics."
         )
         assert sections["context"].startswith(
-            "This honors capstone applied data analysis"
+            "Honors capstone / Gas Kinematics project."
         )
+        assert "UNICORN" not in sections["context"]
         assert "statistical modeling" in sections["method"]
         assert "uncertainty and error propagation" in sections["method"]
         assert "data visualization" in sections["method"]

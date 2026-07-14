@@ -70,6 +70,12 @@ export function DashboardShell() {
     }
     if (summary.canonical_total > 0) {
       actions.push({
+        title: "Add deeper project evidence",
+        detail: "Enrich an approved project without creating duplicate memory",
+        action: "Enrich",
+        href: "/enrichments",
+      });
+      actions.push({
         title: "Run Career Diagnosis",
         detail: "Find your recognition gap and one seven-day proof sprint",
         action: "Diagnose",
@@ -100,7 +106,7 @@ export function DashboardShell() {
       action: "Listen",
       href: "/onboarding",
     });
-    return actions.slice(0, 3);
+    return actions.slice(0, 4);
   }, [summary]);
 
   const activity = useMemo(() => {

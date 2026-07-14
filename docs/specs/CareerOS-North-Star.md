@@ -44,20 +44,23 @@ students.
    outcomes, constraints, goals, and feedback.
 2. **Approve**: extract evidence and let the user shape it into canonical
    Career Memory.
-3. **Map**: connect experiences, skills, claims, proof, validators, target
+3. **Compile**: assemble one approved memory and its approved enrichment into an
+   evidence-backed profile while preserving identity and provenance boundaries.
+4. **Map**: connect experiences, skills, claims, proof, validators, target
    opportunities, and outcomes.
-4. **Diagnose**: compare the student’s desired direction with their proof and
+5. **Diagnose**: compare the student’s desired direction with their proof and
    likely recognition.
-5. **Sprint**: recommend one high-leverage proof action for the next seven
+6. **Sprint**: recommend one high-leverage proof action for the next seven
    days.
-6. **Learn**: record what happened and what the user learned about framing,
+7. **Learn**: record what happened and what the user learned about framing,
    strategy, and outcomes.
-7. **Repeat**: update the diagnosis when new evidence or feedback changes the
+8. **Repeat**: update the diagnosis when new evidence or feedback changes the
    situation.
 
 ```mermaid
 flowchart LR
-    Vault[Career Vault] --> Graph[Evidence Graph]
+    Vault[Career Vault] --> Compiler[Career Memory Compiler]
+    Compiler --> Graph[Evidence Graph]
     Graph --> Diagnosis[Career Diagnosis Engine]
     Diagnosis --> Gap[Recognition Gap Analysis]
     Gap --> Sprint[Proof Sprint Planner]
@@ -85,7 +88,20 @@ It makes the chain behind a recommendation inspectable. A claim may have
 multiple proof items; a proof item may support multiple target opportunities;
 an outcome is attached to what actually happened, not retroactively inferred.
 
-### 3. Career Diagnosis Engine
+### 3. Career Memory Compiler
+
+The Career Memory Compiler is a transient, deterministic interpretation layer.
+It assembles one exact selected, user-owned approved memory, its linked evidence,
+and only approved enrichment attached to that memory. It returns supported
+claims, methods, findings, limitations, role relevance, warnings, provenance,
+and missing evidence without creating a second canonical source of truth.
+
+Approved outcome feedback remains a strategy signal, not proof. Target-role
+context changes interpretation, not facts. The selected memory ID is
+authoritative, so similar projects such as Gas Kinematics and UNICORN cannot
+silently exchange evidence.
+
+### 4. Career Diagnosis Engine
 
 The engine diagnoses why a student is stuck or under-recognized. It should
 separate at least these possibilities:
@@ -100,7 +116,7 @@ separate at least these possibilities:
 Sprint 11 defines the first version of this engine in
 `11-Career-Diagnosis-Engine-v0.md`.
 
-### 4. Recognition Gap Analysis
+### 5. Recognition Gap Analysis
 
 Recognition Gap Analysis compares three views:
 
@@ -112,14 +128,14 @@ The gap is a product insight, not a deficit label. It should identify the
 smallest change in proof, framing, target, or validator that could improve
 recognition.
 
-### 5. Proof Sprint Planner
+### 6. Proof Sprint Planner
 
 The planner recommends one high-leverage next action, not generic advice. A
 proof sprint should have a target, definition of done, artifact or validator,
 seven-day sequence, and a reason it is more valuable than other available
 work.
 
-### 6. Outcome Learning
+### 7. Outcome Learning
 
 Outcome Learning tracks what happened after applications, outreach, drafts,
 projects, and recommendations. It keeps user feedback and observed outcomes
@@ -132,7 +148,11 @@ The architecture is layered:
 
 - Universal Listening and evidence extraction create source observations.
 - Review Persistence stores proposals and decisions.
+- Project Evidence Enrichment resolves repeat evidence against approved memory
+  and requires review before deeper fields join the canonical projection.
 - Canonical Career Memory stores approved current knowledge.
+- Career Memory Compiler creates a transient, evidence-backed interpretation of
+  one selected approved memory and its approved enrichment.
 - Applications and artifacts preserve opportunity context and historical
   outputs.
 - Feedback and outcomes are append-only learning inputs where possible.
@@ -142,10 +162,17 @@ The architecture is layered:
 
 The system must maintain a strict distinction between:
 
-1. current approved facts;
-2. historical submitted artifacts;
-3. user feedback and observed outcomes;
-4. derived diagnosis and recommendations.
+1. canonical proof from current approved memory;
+2. approved enrichment that adds reviewed factual detail to that exact memory;
+3. outcome feedback used only as a strategy signal;
+4. target-role interpretation used only as derived framing;
+5. unsupported claims that must become warnings or missing-evidence prompts;
+6. historical submitted artifacts; and
+7. derived diagnosis and recommendations.
+
+Compilation does not collapse these categories. It carries evidence IDs,
+approved enrichment IDs, outcome-signal IDs, confidence, warnings, and compiler
+version so a downstream result remains inspectable.
 
 Every recommendation should be able to point back to the graph edges, memory
 records, feedback notes, or outcome events that support it. Avoid storing
@@ -157,6 +184,12 @@ prompt/provider version when relevant, and user-visible summaries.
 CareerOS should feel like a calm professional memory studio, not a generic AI
 chat. The interface should make evidence, approval, recognition, and next
 action visible in that order.
+
+When a compiled profile guides an artifact, the interface should make the source
+memory, approved enrichment, evidence trail, strategy-only outcome signals,
+warnings, and missing sections legible. Changing the selected memory or artifact
+settings must not leave a stale preview visible as if it belongs to the new
+selection.
 
 Preferred language includes “approved memory,” “evidence trail,” “story
 ingredients,” “application fit map,” “draft from approved memory,” and
@@ -180,6 +213,10 @@ The long-term diagnosis surface should make it easy to answer:
 - Recommendations must be actionable, prioritized, and proportionate to the
   evidence.
 - Outcomes must be recorded without rewriting historical truth.
+- Outcome feedback may guide strategy but cannot become factual proof or imply
+  causality.
+- Target-role context may change interpretation but cannot introduce facts.
+- The exact selected memory and current user define the generation boundary.
 - Feedback belongs to the user and may correct CareerOS’s framing.
 - The product should help overlooked students become more recognizable without
   asking them to exaggerate or perform a false identity.
@@ -190,6 +227,8 @@ The long-term diagnosis surface should make it easy to answer:
 
 - The full Evidence Graph and Outcome Learning systems are not implemented.
 - Current matching and drafting are deterministic and narrow.
+- Career Memory Compiler patterns are intentionally bounded and cannot interpret
+  every project domain, figure, or table.
 - Recognition likelihood will remain uncertain until CareerOS has enough
   target-specific feedback and outcomes.
 - Career advice is contextual; a diagnosis is not a guarantee of hiring,
@@ -199,11 +238,14 @@ The long-term diagnosis surface should make it easy to answer:
 
 ## Future follow-ups
 
-- Ship Career Diagnosis Engine v0 as the next intelligence slice.
+- Expand compiled-profile coverage beyond project memories in diagnosis and
+  application intelligence after the same provenance contracts are tested.
 - Add graph-backed validators and target opportunity edges.
 - Add application, outreach, project, recommendation, and interview outcome
   events with immutable historical context.
 - Learn from user-provided feedback without treating correlation as causation.
+- Let future resume and cover-letter builders consume safe compiled claim
+  ingredients without relaxing approval or evidence boundaries.
 - Measure whether proof sprints improve recognition, response rates, interviews,
   or other user-defined outcomes.
 - Make the architecture exportable, privacy-aware, and portable across

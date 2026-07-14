@@ -97,7 +97,13 @@ class ApplicationMemoryMatch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     match_score: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False)
     match_reason: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    # Legacy rows contain a flat evidence-ID list. Sprint 13.1 stores a versioned
+    # JSONB provenance envelope so ListeningEvidence and enrichment UUIDs remain
+    # distinct without a destructive data migration.
+    evidence_ids: Mapped[list[str] | dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+    )
     themes_matched: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
 
 

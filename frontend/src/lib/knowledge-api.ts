@@ -589,7 +589,13 @@ export function proposalStructuredFields(
 ): Array<{ label: string; value: string }> {
   const hidden = new Set(["normalized_name", "institution", "field"]);
   return Object.entries(proposal.proposed_value)
-    .filter(([key, value]) => !hidden.has(key) && value != null && value !== "")
+    .filter(
+      ([key, value]) =>
+        !hidden.has(key) &&
+        !key.startsWith("_") &&
+        value != null &&
+        value !== "",
+    )
     .map(([key, value]) => ({
       label: key
         .replaceAll("_", " ")
@@ -610,7 +616,13 @@ export function proposalDetail(proposal: KnowledgeProposal): string {
     "normalized_name",
   ]);
   const details = Object.entries(proposal.proposed_value)
-    .filter(([key, value]) => !ignored.has(key) && value != null && value !== "")
+    .filter(
+      ([key, value]) =>
+        !ignored.has(key) &&
+        !key.startsWith("_") &&
+        value != null &&
+        value !== "",
+    )
     .slice(0, 3)
     .map(([, value]) =>
       Array.isArray(value) ? value.join(", ") : String(value),

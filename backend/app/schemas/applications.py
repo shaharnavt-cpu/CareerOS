@@ -111,6 +111,7 @@ class ApplicationMemoryMatchView(BaseModel):
     match_score: float
     match_reason: str
     evidence_ids: list[str]
+    approved_enrichment_ids: list[uuid.UUID] = Field(default_factory=list)
     themes_matched: list[str]
     memory: CanonicalReviewMemory
 
@@ -123,6 +124,7 @@ class ApplicationDraftView(BaseModel):
     prompt: str
     draft_text: str
     evidence_ids: list[str]
+    approved_enrichment_ids: list[uuid.UUID] = Field(default_factory=list)
     status: ApplicationDraftStatus
     draft_metadata: dict[str, Any]
     created_at: datetime
@@ -180,6 +182,7 @@ class ApplicationDraftResponse(BaseModel):
     draft: ApplicationDraftView
     matches_used: list[ApplicationMemoryMatchView]
     evidence_used: list[str]
+    approved_enrichment_ids_used: list[uuid.UUID] = Field(default_factory=list)
 
 
 MEMORY_TYPE_WEIGHT: dict[ReviewProposalType, float] = {
