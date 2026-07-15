@@ -35,6 +35,8 @@ EXPECTED_TABLES = {
     "application_questions",
     "application_memory_matches",
     "application_drafts",
+    "application_packages",
+    "application_package_versions",
     "diagnosis_sessions",
     "diagnosis_results",
     "career_feedback_events",
@@ -69,6 +71,7 @@ APPEND_ONLY_TABLES = {
     "listening_proposal_evidence_links",
     "story_memberships",
     "story_evidence",
+    "application_package_versions",
 }
 
 

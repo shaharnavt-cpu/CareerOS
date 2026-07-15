@@ -4,14 +4,38 @@ CareerOS is a career-intelligence system that turns reviewed professional
 evidence into reusable, role-specific proof while keeping the user in control.
 It currently includes evidence listening and review, canonical career memory,
 project enrichment, compiled memory profiles, diagnosis, proof artifacts, and
-application intelligence in deterministic local mode.
+application intelligence in deterministic local mode. Sprint 14 adds a
+versioned Application Package Builder that creates evidence-traced positioning,
+resume bullets, a cover letter, application snippets, proof suggestions, and
+unsupported-claim warnings from explicitly selected approved memory.
 
 For the current product snapshot, MVP roadmap, intelligence boundaries, and
 Windows development handoff, begin with
 [docs/00-Current-State.md](docs/00-Current-State.md),
 [docs/25-Roadmap-to-MVP.md](docs/25-Roadmap-to-MVP.md),
 [docs/26-Intelligence-Architecture.md](docs/26-Intelligence-Architecture.md),
-and [docs/27-Claude-Code-Handoff.md](docs/27-Claude-Code-Handoff.md).
+[docs/27-Claude-Code-Handoff.md](docs/27-Claude-Code-Handoff.md), and
+[docs/28-Application-Package-Builder.md](docs/28-Application-Package-Builder.md).
+
+## Current application-package flow
+
+Open <http://localhost:3000/application-packages> after starting the local
+stack. Create or reopen a target package, select approved Career Memory, and
+generate a reviewable draft. Target text changes relevance only; factual output
+comes from each exact selected memory and its approved same-memory enrichment.
+Outcome feedback remains strategy-only.
+
+Generated, regenerated, and saved user edits append immutable versions. Target,
+selection, or compiled-proof changes make the latest output stale; stale output
+must be regenerated before it can be marked ready or saved as a current edit.
+Blocking claim warnings also prevent readiness. Edit provenance remains
+server-owned, warnings and complete direct-source traces stay visible, and
+generated prose never overwrites the user's base resume or canonical memory.
+
+The backend API is rooted at `/api/application-packages`; interactive contracts
+are available in FastAPI's local `/docs`. Deterministic package generation does
+not require an external model key. Copy-ready output is implemented; automatic
+submission and PDF/DOCX/ATS guarantees are not.
 
 ## Repository layout
 

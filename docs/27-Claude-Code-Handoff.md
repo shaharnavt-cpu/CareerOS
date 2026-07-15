@@ -2,11 +2,12 @@
 
 ## Purpose
 
-This is the practical starting point for the next implementation task. CareerOS
-already has an approved-memory, enrichment, compiler, diagnosis, proof-artifact,
-and application-intelligence foundation. The next planned feature is the
-reviewed Resume and Cover Letter Builder described in
-[14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md).
+This document was the practical handoff into Sprint 14. The reviewed Resume and
+Cover Letter Builder is now implemented; use [00-Current-State.md](00-Current-State.md)
+for the current product boundary and
+[28-Application-Package-Builder.md](28-Application-Package-Builder.md) for its
+delivered behavior. The Sprint 14 delivery notes below remain as historical
+implementation context, not as the next planned feature.
 
 Read these documents before changing product behavior:
 
@@ -15,6 +16,7 @@ Read these documents before changing product behavior:
 3. [26-Intelligence-Architecture.md](26-Intelligence-Architecture.md)
 4. [13.1-Career-Memory-Compiler-Proof-Intelligence.md](specs/13.1-Career-Memory-Compiler-Proof-Intelligence.md)
 5. [14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md)
+6. [28-Application-Package-Builder.md](28-Application-Package-Builder.md)
 
 ## Repository orientation
 
@@ -187,10 +189,10 @@ temporary smoke-test output.
 10. **Expose uncertainty.** Missing evidence should produce a gap, warning, or
     question, never plausible invented prose.
 
-## Recommended Sprint 14 delivery shape
+## Historical Sprint 14 delivery shape (completed)
 
-Treat [the Sprint 14 spec](specs/14-Resume-Cover-Letter-Builder.md) as the
-source of scope. Deliver vertical slices in this order:
+The implementation followed [the Sprint 14 spec](specs/14-Resume-Cover-Letter-Builder.md)
+as its source of scope and delivered these vertical slices:
 
 1. define package and immutable-version contracts/migrations;
 2. build a deterministic claim-selection and provenance service using compiled
@@ -201,9 +203,9 @@ source of scope. Deliver vertical slices in this order:
    outcome-signal boundaries;
 6. run the full verification sequence and one realistic local smoke path.
 
-Do not start with templates, PDF polish, model integrations, job-board
-automation, or browser autofill. They are consumers of a trustworthy package,
-not substitutes for it.
+Templates, PDF polish, model integrations, job-board automation, and browser
+autofill remain downstream consumers of the trustworthy package rather than
+substitutes for it.
 
 ## Handoff checklist
 

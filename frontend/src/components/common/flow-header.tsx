@@ -60,6 +60,12 @@ export function FlowHeader({ current }: { current: number }) {
           >
             Applications
           </a>
+          <a
+            className="rounded-full px-3 py-1.5 hover:bg-[#edf3ee]"
+            href="/application-packages"
+          >
+            Packages
+          </a>
         </nav>
         <span className="rounded-full border border-[#d8e0db] bg-white px-3 py-1.5 text-xs font-medium text-[#52635d] md:hidden">
           Step {current + 1} of 4

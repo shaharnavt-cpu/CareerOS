@@ -13,8 +13,8 @@ materials separate and inspectable.
 
 This document is the current handoff snapshot. For the system's trust model,
 read [26-Intelligence-Architecture.md](26-Intelligence-Architecture.md). For
-the next implementation sprint, read
-[14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md).
+Sprint 14's implemented package workflow, read
+[28-Application-Package-Builder.md](28-Application-Package-Builder.md).
 
 ## What exists today
 
@@ -26,7 +26,7 @@ Universal Listening
   -> Approved Canonical Memory
   -> Project Evidence Enrichment
   -> Career Memory Compiler
-  -> Diagnosis / Proof Artifact / Application Intelligence
+  -> Diagnosis / Proof Artifact / Application Intelligence / Application Package
   -> Teach CareerOS outcome signals
 ```
 
@@ -43,6 +43,7 @@ The implemented product surfaces include:
 | Career Diagnosis | Assesses proof, gaps, and next actions from approved memory; approved outcome feedback remains a labeled strategy signal. |
 | Proof Artifact Builder | Produces editable, versioned, evidence-backed case studies and channel variants from one selected memory. |
 | Application Intelligence | Parses opportunities, matches approved memory, exposes gaps, and creates editable application-response drafts. |
+| Application Package Builder | Produces deterministic positioning, tailored bullets, a cover letter, five answer snippets, proof suggestions, evidence traces, warnings, and immutable versions from explicitly selected approved memory. |
 | Teach CareerOS | Captures feedback/outcome signals for future strategy without rewriting factual proof. |
 
 ## Current architecture
@@ -65,12 +66,13 @@ Source document / pasted note / conversation
   -> approved canonical memory
   -> approved enrichment for that exact memory
   -> compiled memory profile
-  -> diagnosis, proof artifact, application intelligence
+  -> diagnosis, proof artifact, application intelligence, application package
 ```
 
 The compiler is transient: it is created from approved records at read time and
-does not become another canonical source of truth. Saved artifacts and drafts
-retain their own historical snapshot/provenance.
+does not become another canonical source of truth. Saved artifacts and
+application-package versions retain their own historical input, profile,
+provenance, warning, and output snapshots.
 
 ## Trust boundaries that must remain intact
 
@@ -113,8 +115,11 @@ shows the memory-to-proof loop:
    case study from the compiled profile.
 5. Change the selected memory and show that the prior artifact disappears into a
    new-draft state instead of being mislabeled as the new project.
-6. Optionally use **Diagnosis** or **Applications** to show the same approved
-   project evidence informing gaps and opportunity matching.
+6. Open **Application Packages**, enter the target, select the same approved
+   memory, and generate a positioning summary, resume bullets, cover letter,
+   snippets, traces, and unsupported-claim warnings.
+7. Change the target or selected proof and show the stale state, then regenerate
+   to append a new immutable version.
 
 For a concise proof demo, use:
 
@@ -140,21 +145,23 @@ test commands in [27-Claude-Code-Handoff.md](27-Claude-Code-Handoff.md).
 
 ## What is not built yet
 
-The product has intelligence and proof foundations, but it does **not** yet
-include:
+The product has a complete approved-memory-to-application-package path, but it
+does **not** yet include:
 
-- a reviewed Resume and Cover Letter Builder;
-- saveable application-package snapshots containing those materials;
 - guided career interviewing that fills memory gaps conversationally;
 - source-aware figure, table, slide, or OCR understanding;
 - a seeded, one-click showcase/demo mode;
-- a complete application package tracker and submission timeline;
+- package-version-linked application outcomes, submission tracking, and a
+  complete follow-up timeline;
+- DOCX/PDF application-package export, visual resume templates, or ATS
+  guarantees;
 - browser-extension extraction or autofill;
 - production authentication, multi-user operations, hosted exports, or public
   portfolio publishing.
 
-Those omissions are deliberate. The next document-generation feature must
-reuse the approved-memory and compiled-profile boundary rather than bypass it.
+Those omissions are deliberate. The implemented builder uses copy-ready drafts
+and human review rather than treating document polish or submission automation
+as a substitute for trustworthy proof.
 
 ## Known limitations
 
@@ -167,17 +174,24 @@ reuse the approved-memory and compiled-profile boundary rather than bypass it.
   projects receive generic, conservative compilation.
 - Current generated proof is editable and versioned, but its visual templates,
   document exports, and public presentation are intentionally limited.
+- Application-package requirement detection and composition are bounded,
+  deterministic heuristics. Positive-capability matching excludes negated
+  limitations. Saved edits retain server-owned provenance and are audited for
+  unsupported numbers, recognized capability claims, and cross-memory resume
+  borrowing; unresolved blocking warnings prevent readiness.
 - Outcome data is sparse and is never treated as proof of causality.
 - The current local experience is development-oriented; deployment, security,
   and operational hardening need their own scoped work before broad use.
 
 ## What to build next
 
-Sprint 14 should build a **Resume and Cover Letter Builder** on top of the
-existing intelligence layer. It should package approved, compiled career proof
-for a target opportunity while keeping an evidence trace and unsupported-claim
-warnings visible. It must not become an unconstrained text generator.
+Sprint 15 should add an **Intelligent Guided Career Interview** that asks the
+smallest useful questions when compiled proof is thin and routes every factual
+answer through review. Richer exports, seeded demo data, and package tracking
+remain subsequent MVP work.
 
-See [25-Roadmap-to-MVP.md](25-Roadmap-to-MVP.md) for the recommended sequence
-and [14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md)
-for the implementation-ready product/technical spec.
+See [25-Roadmap-to-MVP.md](25-Roadmap-to-MVP.md) for the sequence,
+[14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md) for
+the implemented Sprint 14 contract, and
+[28-Application-Package-Builder.md](28-Application-Package-Builder.md) for the
+workflow guide.
