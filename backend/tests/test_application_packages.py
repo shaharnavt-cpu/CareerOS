@@ -15,6 +15,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.application_packages import get_application_package_service
+from app.core.config import Settings
 from app.db.session import SessionLocal, engine
 from app.main import app
 from app.models import (
@@ -30,6 +31,7 @@ from app.schemas.application_packages import (
     ApplicationPackageStatus,
     ApplicationPackageUpdateRequest,
     ApplicationPackageView,
+    ApplicationQuestion,
     EvidenceSourceType,
     EvidenceSupportType,
 )
@@ -61,6 +63,39 @@ from tests.test_career_memory_compiler import (
 class RichPackageFixture:
     user_id: uuid.UUID
     seeded: SeededCompilerMemory
+
+
+def _required_application_questions() -> list[ApplicationQuestion]:
+    return [
+        ApplicationQuestion(
+            question_id="motivation",
+            question_text="Why are you interested in this role?",
+            required=True,
+        ),
+        ApplicationQuestion(
+            question_id="complex-data-project",
+            question_text="Describe a project where you analyzed complex data.",
+            required=True,
+        ),
+        ApplicationQuestion(
+            question_id="quality-reliability",
+            question_text="How did you ensure the quality or reliability of your work?",
+            required=True,
+        ),
+    ]
+
+
+def _application_package_service(user_id: uuid.UUID) -> ApplicationPackageService:
+    """Keep the non-live suite isolated from workstation provider settings."""
+
+    return ApplicationPackageService(
+        user_id=user_id,
+        settings=Settings(
+            _env_file=None,
+            application_writer_provider="local-deterministic",
+            application_writer_data_policy="private",
+        ),
+    )
 
 
 def _require_postgres() -> None:
@@ -105,8 +140,9 @@ def _create_and_generate(
     required_skills: list[str] | None = None,
     preferred_skills: list[str] | None = None,
     responsibilities: list[str] | None = None,
+    application_questions: list[ApplicationQuestion] | None = None,
 ) -> ApplicationPackageView:
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     with SessionLocal() as session:
         created = service.create(
             session,
@@ -117,6 +153,11 @@ def _create_and_generate(
                 required_skills=required_skills or [],
                 preferred_skills=preferred_skills or [],
                 responsibilities=responsibilities or [],
+                application_questions=(
+                    _required_application_questions()
+                    if application_questions is None
+                    else application_questions
+                ),
                 selected_memory_ids=selected_memory_ids,
             ),
         )
@@ -217,7 +258,7 @@ def test_selection_requires_explicit_current_user_approved_memory_ids(
 ) -> None:
     fixture = rich_package_fixture
     pending_id = _seed_unapproved_memory(fixture.user_id)
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
 
     with SessionLocal() as session:
         eligible = service.list_eligible_memories(session, "Data Science Intern")
@@ -251,7 +292,7 @@ def test_selection_requires_explicit_current_user_approved_memory_ids(
                 ),
             )
 
-    foreign_service = ApplicationPackageService(user_id=uuid.uuid4())
+    foreign_service = _application_package_service(uuid.uuid4())
     with SessionLocal() as session:
         with pytest.raises(
             ApplicationPackageValidationError,
@@ -277,6 +318,14 @@ def test_generation_uses_approved_enrichment_and_keeps_outcomes_strategy_only(
         selected_memory_ids=[fixture.seeded.gas_memory_id],
         role_title="Data Science Intern",
         target_description="Data analysis, modeling, uncertainty, and communication.",
+        application_questions=[
+            _required_application_questions()[0],
+            ApplicationQuestion(
+                question_id="optional-additional-context",
+                question_text="Is there any additional context you want to share?",
+                required=False,
+            ),
+        ],
     )
     latest = generated.latest_version
     assert latest is not None
@@ -288,6 +337,9 @@ def test_generation_uses_approved_enrichment_and_keeps_outcomes_strategy_only(
         generated.enrichment_ids_used
     )
     assert fixture.seeded.archived_feedback_id not in generated.outcome_signal_ids_used
+    assert [item.question_id for item in generated.application_snippets] == [
+        "motivation"
+    ]
 
     with SessionLocal() as session:
         record = session.scalar(
@@ -398,10 +450,54 @@ def test_gas_data_science_package_is_detailed_without_invented_impact(
         for bullet in group.bullets
     )
     assert all(
-        "No quantified outcome" in " ".join(bullet.warnings)
+        "No quantified outcome" not in " ".join(bullet.warnings)
         for group in generated.resume_bullets
         for bullet in group.bullets
     )
+    assert any(
+        warning.code == "NO_QUANTIFIED_OUTCOME" for warning in generated.warnings
+    )
+    version_view = generated.latest_version
+    draft_text = " ".join(
+        [
+            version_view.outputs.positioning_summary.primary_positioning,
+            version_view.outputs.cover_letter.full_text,
+            *(
+                bullet.bullet_text
+                for group in version_view.outputs.resume_bullets
+                for bullet in group.bullets
+            ),
+            *(snippet.text for snippet in version_view.outputs.application_snippets),
+        ]
+    ).casefold()
+    for awkward in (
+        "focused on the project tested whether",
+        "the documented result was",
+        "approved memory",
+        "approved evidence",
+    ):
+        assert awkward not in draft_text
+    assert 230 <= len(version_view.outputs.cover_letter.full_text.split()) <= 420
+    assert all(
+        len(bullet.bullet_text.split()) <= 38
+        for group in version_view.outputs.resume_bullets
+        for bullet in group.bullets
+    )
+    assert all(
+        len(snippet.text.split()) <= 120
+        for snippet in version_view.outputs.application_snippets
+    )
+    assert version_view.quality_review.primary_issue
+    assert version_view.provider_metadata.provider == "local-deterministic"
+    mechanical_outputs = version_view.outputs.model_copy(deep=True)
+    mechanical_outputs.cover_letter.full_text = (
+        "My approved work focused on the project tested whether the target fit."
+    )
+    mechanical_review = ApplicationPackageService._evaluate_output_quality(
+        mechanical_outputs
+    )
+    assert mechanical_review.naturalness == "Needs attention"
+    assert "mechanical" in mechanical_review.primary_issue.casefold()
 
 
 def test_unicorn_ai_package_preserves_project_boundary(
@@ -490,8 +586,8 @@ def test_unsupported_cloud_and_deployment_requirements_warn_without_claiming_the
         "production ML deployment",
     } <= warning_requirements
     warning_text = " ".join(item.message for item in generated.warnings).casefold()
-    assert "no approved memory currently supports deployment" in warning_text
-    assert "no approved memory currently supports that cloud experience" in (
+    assert "selected proof does not currently support deployment" in warning_text
+    assert "selected proof does not currently support that cloud experience" in (
         warning_text
     )
     assert all(
@@ -544,6 +640,7 @@ def test_sparse_memory_does_not_invent_technical_capability(
             "Investigate instrument behavior and communicate technical findings."
         ),
         required_skills=["technical communication"],
+        application_questions=[],
     )
     claims = _substantive_claim_text(generated)
     assert generated.cover_letter is not None
@@ -554,15 +651,7 @@ def test_sparse_memory_does_not_invent_technical_capability(
     assert "developed documented experience with" not in (
         generated.cover_letter.opening_paragraph.casefold()
     )
-    technical_snippet = next(
-        item
-        for item in generated.application_snippets
-        if item.question == "What technical skills would you bring?"
-    )
-    assert (
-        "strongest technical areas supported" not in technical_snippet.text.casefold()
-    )
-    assert "not a stronger" in technical_snippet.text.casefold()
+    assert generated.application_snippets == []
     assert "technical communication" in {
         item.requirement.casefold()
         for item in generated.warnings
@@ -609,7 +698,7 @@ def test_title_only_project_shortcuts_require_substantive_proof_and_keep_provena
         if exact_title_target.positioning_summary
         else ""
     )
-    assert "limited approved context" in (
+    assert "limited project context" in (
         exact_title_target.positioning_summary.primary_positioning.casefold()
         if exact_title_target.positioning_summary
         else ""
@@ -785,7 +874,11 @@ def test_resume_cover_letter_and_snippets_have_human_readable_evidence_traces(
                 for item in paragraph.evidence_trace
             )
 
-    assert len(generated.application_snippets) == 5
+    assert [item.question_id for item in generated.application_snippets] == [
+        "motivation",
+        "complex-data-project",
+        "quality-reliability",
+    ]
     for snippet in generated.application_snippets:
         assert snippet.text.strip()
         assert snippet.evidence_trace
@@ -860,7 +953,7 @@ def test_output_edits_ignore_client_trace_and_identity_injection(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     generated = _create_and_generate(
         fixture,
         selected_memory_ids=[fixture.seeded.gas_memory_id],
@@ -932,7 +1025,7 @@ def test_cross_memory_edit_is_blocking_until_corrected_and_cannot_be_ready(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     generated = _create_and_generate(
         fixture,
         selected_memory_ids=[fixture.seeded.unicorn_memory_id],
@@ -1012,7 +1105,7 @@ def test_edit_audit_ignores_unchanged_target_numbers_but_blocks_new_claims(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     generated = _create_and_generate(
         fixture,
         selected_memory_ids=[fixture.seeded.gas_memory_id],
@@ -1106,7 +1199,7 @@ def test_versions_are_immutable_and_target_or_selection_changes_are_stale(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     with SessionLocal() as session:
         created = service.create(
             session,
@@ -1196,7 +1289,7 @@ def test_stale_ready_package_is_exposed_as_draft_after_memory_changes(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     generated = _create_and_generate(
         fixture,
         selected_memory_ids=[fixture.seeded.gas_memory_id],
@@ -1270,7 +1363,7 @@ def test_proof_suggestions_only_attach_ready_artifacts(
             artifact.id,
             ProofArtifactUpdateRequest(status=ProofArtifactStatus.READY),
         )
-        regenerated = ApplicationPackageService(user_id=fixture.user_id).regenerate(
+        regenerated = _application_package_service(fixture.user_id).regenerate(
             session,
             generated.package_id,
         )
@@ -1286,7 +1379,7 @@ def test_application_package_api_crud_generate_edit_regenerate_and_archive(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
-    service = ApplicationPackageService(user_id=fixture.user_id)
+    service = _application_package_service(fixture.user_id)
     original_overrides = dict(app.dependency_overrides)
     app.dependency_overrides[get_application_package_service] = lambda: service
     try:
@@ -1310,6 +1403,10 @@ def test_application_package_api_crud_generate_edit_regenerate_and_archive(
                     "required_skills": ["data analysis", "modeling"],
                     "preferred_skills": ["technical communication"],
                     "responsibilities": ["Validate analytical results"],
+                    "application_questions": [
+                        question.model_dump(mode="json")
+                        for question in _required_application_questions()
+                    ],
                     "selected_memory_ids": [str(fixture.seeded.gas_memory_id)],
                 },
             )
@@ -1346,7 +1443,14 @@ def test_application_package_api_crud_generate_edit_regenerate_and_archive(
             )
             assert generated_body["resume_bullets"]
             assert generated_body["cover_letter"]["full_text"]
-            assert generated_body["application_snippets"]
+            assert [
+                item["question_id"]
+                for item in generated_body["application_snippets"]
+            ] == [
+                "motivation",
+                "complex-data-project",
+                "quality-reliability",
+            ]
             assert generated_body["evidence_trace"]
 
             original_cover_text = generated_body["cover_letter"]["full_text"]

@@ -41,6 +41,42 @@ class ApplicationWarningSeverity(StrEnum):
     BLOCKING = "BLOCKING"
 
 
+class ApplicationQuestion(BaseModel):
+    """One explicit application-form question supplied for generation."""
+
+    question_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    question_text: str = Field(min_length=1, max_length=2000)
+    required: bool = True
+    maximum_length: int | None = Field(default=None, ge=20, le=12_000)
+    response_type: str | None = Field(default=None, max_length=100)
+    relevant_target_requirement_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+
+    @field_validator("question_id", "question_text", "response_type", mode="before")
+    @classmethod
+    def trim_question_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("relevant_target_requirement_ids", mode="after")
+    @classmethod
+    def requirement_ids_are_unique(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            rendered = value.strip()
+            if not rendered or rendered in seen:
+                continue
+            seen.add(rendered)
+            cleaned.append(rendered)
+        return cleaned
+
+
 class ApplicationPackageCreateRequest(BaseModel):
     opportunity_id: uuid.UUID | None = None
     display_name: str | None = Field(default=None, max_length=500)
@@ -52,7 +88,11 @@ class ApplicationPackageCreateRequest(BaseModel):
     required_skills: list[str] = Field(default_factory=list, max_length=100)
     preferred_skills: list[str] = Field(default_factory=list, max_length=100)
     responsibilities: list[str] = Field(default_factory=list, max_length=100)
-    selected_memory_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
+    application_questions: list[ApplicationQuestion] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    selected_memory_ids: list[uuid.UUID] = Field(default_factory=list, max_length=4)
 
     @field_validator(
         "display_name",
@@ -88,6 +128,16 @@ class ApplicationPackageCreateRequest(BaseModel):
             raise ValueError("Selected Career Memory IDs must be unique.")
         return values
 
+    @field_validator("application_questions", mode="after")
+    @classmethod
+    def question_ids_are_unique(
+        cls, values: list[ApplicationQuestion]
+    ) -> list[ApplicationQuestion]:
+        ids = [value.question_id for value in values]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Application question IDs must be unique.")
+        return values
+
 
 class ApplicationPackageUpdateRequest(BaseModel):
     opportunity_id: uuid.UUID | None = None
@@ -100,7 +150,11 @@ class ApplicationPackageUpdateRequest(BaseModel):
     required_skills: list[str] | None = Field(default=None, max_length=100)
     preferred_skills: list[str] | None = Field(default=None, max_length=100)
     responsibilities: list[str] | None = Field(default=None, max_length=100)
-    selected_memory_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+    application_questions: list[ApplicationQuestion] | None = Field(
+        default=None,
+        max_length=50,
+    )
+    selected_memory_ids: list[uuid.UUID] | None = Field(default=None, max_length=4)
     status: ApplicationPackageStatus | None = None
 
     @field_validator(
@@ -130,6 +184,7 @@ class ApplicationPackageUpdateRequest(BaseModel):
             "required_skills",
             "preferred_skills",
             "responsibilities",
+            "application_questions",
             "selected_memory_ids",
             "status",
         }
@@ -146,9 +201,25 @@ class ApplicationPackageUpdateRequest(BaseModel):
             )
         return self
 
+    @field_validator("application_questions", mode="after")
+    @classmethod
+    def question_ids_are_unique(
+        cls, values: list[ApplicationQuestion] | None
+    ) -> list[ApplicationQuestion] | None:
+        if values is None:
+            return None
+        ids = [value.question_id for value in values]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Application question IDs must be unique.")
+        return values
+
 
 class ApplicationPackageGenerateRequest(BaseModel):
-    selected_memory_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+    selected_memory_ids: list[uuid.UUID] | None = Field(default=None, max_length=4)
+    application_questions: list[ApplicationQuestion] | None = Field(
+        default=None,
+        max_length=50,
+    )
 
     @field_validator("selected_memory_ids", mode="after")
     @classmethod
@@ -157,6 +228,18 @@ class ApplicationPackageGenerateRequest(BaseModel):
     ) -> list[uuid.UUID] | None:
         if values is not None and len(set(values)) != len(values):
             raise ValueError("Selected Career Memory IDs must be unique.")
+        return values
+
+    @field_validator("application_questions", mode="after")
+    @classmethod
+    def question_ids_are_unique(
+        cls, values: list[ApplicationQuestion] | None
+    ) -> list[ApplicationQuestion] | None:
+        if values is None:
+            return None
+        ids = [value.question_id for value in values]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Application question IDs must be unique.")
         return values
 
 
@@ -180,6 +263,118 @@ class ApplicationPackageWarning(BaseModel):
     severity: ApplicationWarningSeverity = ApplicationWarningSeverity.CAUTION
     requirement: str | None = None
     memory_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class RequirementCoverageItem(BaseModel):
+    """A grouped target requirement and the approved proof behind its status."""
+
+    requirement: str
+    evidence: list[str] = Field(default_factory=list)
+    memory_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class RequirementCoverage(BaseModel):
+    strongly_supported: list[RequirementCoverageItem] = Field(default_factory=list)
+    partially_supported: list[RequirementCoverageItem] = Field(default_factory=list)
+    unsupported: list[RequirementCoverageItem] = Field(default_factory=list)
+    not_relevant_enough: list[RequirementCoverageItem] = Field(default_factory=list)
+
+
+class ApplicationJobUnderstanding(BaseModel):
+    role_family: str
+    seniority: str
+    central_objective: str
+    core_responsibilities: list[str] = Field(default_factory=list)
+    must_have_requirements: list[str] = Field(default_factory=list)
+    preferred_requirements: list[str] = Field(default_factory=list)
+    technical_expectations: list[str] = Field(default_factory=list)
+    communication_expectations: list[str] = Field(default_factory=list)
+    concrete_tools_requiring_direct_proof: list[str] = Field(default_factory=list)
+    generic_concepts: list[str] = Field(default_factory=list)
+
+
+class ApplicationClaimPlan(BaseModel):
+    primary_positioning: str
+    primary_proof: str
+    secondary_proof: list[str] = Field(default_factory=list)
+    supported_requirements: list[str] = Field(default_factory=list)
+    partially_supported_requirements: list[str] = Field(default_factory=list)
+    unsupported_requirements: list[str] = Field(default_factory=list)
+    claims_not_to_make: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    resume_strategy: str
+    cover_letter_narrative_strategy: str
+    snippet_strategy: str
+    tone: str
+
+
+class ApplicationWritingIntelligence(BaseModel):
+    job_understanding: ApplicationJobUnderstanding
+    requirement_coverage: RequirementCoverage
+    claim_plan: ApplicationClaimPlan
+    strategy_notes: list[str] = Field(default_factory=list)
+
+
+class ApplicationWritingQualityReview(BaseModel):
+    evidence_support: str
+    role_relevance: str
+    specificity: str
+    naturalness: str
+    concision: str
+    recruiter_readability: str
+    genericness: str
+    repetition: str
+    overclaim_risk: str
+    primary_issue: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class ApplicationProviderMetadata(BaseModel):
+    provider: str
+    model: str | None = None
+    review_model: str | None = None
+    review_pass_ran: bool = False
+    request_id: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    latency_ms: int | None = Field(default=None, ge=0)
+
+
+class ApplicationValidationRepair(BaseModel):
+    """A response-safe deterministic change made before version persistence."""
+
+    code: str
+    output_section: str
+    field_path: str
+    normalized_disputed_phrase: str = ""
+    referenced_evidence_ids: list[str] = Field(default_factory=list)
+    action: str
+
+
+class ApplicationValidationSummary(BaseModel):
+    status: str
+    unsupported_claims_removed: int = Field(default=0, ge=0)
+    blocking_issue_count: int = Field(default=0, ge=0)
+    notes: list[str] = Field(default_factory=list)
+    repairs: list[ApplicationValidationRepair] = Field(default_factory=list)
+
+
+class ApplicationEvidenceGroup(BaseModel):
+    memory_id: uuid.UUID | None = None
+    memory_title: str
+    direct_proof: list[str] = Field(default_factory=list)
+    approved_enrichment: list[str] = Field(default_factory=list)
+    supported_framing: list[str] = Field(default_factory=list)
+    strategy_signals: list[str] = Field(default_factory=list)
+    target_relevance: list[str] = Field(default_factory=list)
+
+
+class ApplicationWarningGroups(BaseModel):
+    strongly_supported: list[str] = Field(default_factory=list)
+    partially_supported: list[ApplicationPackageWarning] = Field(default_factory=list)
+    unsupported: list[ApplicationPackageWarning] = Field(default_factory=list)
+    missing_proof: list[ApplicationPackageWarning] = Field(default_factory=list)
 
 
 class ResumeBullet(BaseModel):
@@ -226,6 +421,9 @@ class PositioningSummary(BaseModel):
 
 
 class ApplicationSnippet(BaseModel):
+    # Empty is accepted only when hydrating a pre-contract historical version.
+    # Every newly generated provider answer is validated with a non-empty ID.
+    question_id: str = ""
     question: str
     text: str
     evidence_trace: list[ApplicationEvidenceTrace]
@@ -293,6 +491,11 @@ class ApplicationClaimLedgerEntry(BaseModel):
     user_edited: bool = False
     strategy_signal_ids: list[uuid.UUID] = Field(default_factory=list)
     strategy_signal_caveat: str | None = None
+    evidence_atom_ids: list[str] = Field(default_factory=list)
+    claim_type: str | None = None
+    tools_claimed: list[str] = Field(default_factory=list)
+    outcome_claimed: dict[str, object] | None = None
+    certainty: str | None = None
 
 
 class ApplicationPackageMemoryOption(BaseModel):
@@ -303,6 +506,8 @@ class ApplicationPackageMemoryOption(BaseModel):
     source_labels: list[str]
     confidence: float = Field(ge=0, le=1)
     target_reason: str | None = None
+    recommended: bool = False
+    recommendation_rank: int | None = Field(default=None, ge=1)
 
 
 class ApplicationPackageVersionView(BaseModel):
@@ -322,6 +527,11 @@ class ApplicationPackageVersionView(BaseModel):
     user_edits: dict[str, object]
     generator_version: str
     generation_reason: ApplicationPackageGenerationReason
+    writing_intelligence: ApplicationWritingIntelligence
+    requirement_coverage: RequirementCoverage
+    quality_review: ApplicationWritingQualityReview
+    provider_metadata: ApplicationProviderMetadata
+    validation_summary: ApplicationValidationSummary
     created_at: datetime
 
 
@@ -337,6 +547,7 @@ class ApplicationPackageView(BaseModel):
     required_skills: list[str]
     preferred_skills: list[str]
     responsibilities: list[str]
+    application_questions: list[ApplicationQuestion] = Field(default_factory=list)
     selected_memory_ids: list[uuid.UUID]
     status: ApplicationPackageStatus
     latest_version: ApplicationPackageVersionView | None
@@ -357,6 +568,15 @@ class ApplicationPackageView(BaseModel):
     enrichment_ids_used: list[uuid.UUID] = Field(default_factory=list)
     outcome_signal_ids_used: list[uuid.UUID] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
+    writing_intelligence: ApplicationWritingIntelligence | None = None
+    requirement_coverage: RequirementCoverage | None = None
+    quality_review: ApplicationWritingQualityReview | None = None
+    provider_metadata: ApplicationProviderMetadata | None = None
+    validation_summary: ApplicationValidationSummary | None = None
+    evidence_groups: list[ApplicationEvidenceGroup] = Field(default_factory=list)
+    warning_groups: ApplicationWarningGroups = Field(
+        default_factory=ApplicationWarningGroups
+    )
     created_at: datetime
     updated_at: datetime
 

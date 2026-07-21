@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.models import (
     ApplicationOpportunity,
     ApplicationPackage,
@@ -26,7 +27,10 @@ from app.models import (
 )
 from app.schemas.application_packages import (
     ApplicationClaimLedgerEntry,
+    ApplicationClaimPlan,
+    ApplicationEvidenceGroup,
     ApplicationEvidenceTrace,
+    ApplicationJobUnderstanding,
     ApplicationPackageCreateRequest,
     ApplicationPackageGenerateRequest,
     ApplicationPackageGenerationReason,
@@ -39,19 +43,68 @@ from app.schemas.application_packages import (
     ApplicationPackageVersionView,
     ApplicationPackageView,
     ApplicationPackageWarning,
+    ApplicationProviderMetadata,
+    ApplicationQuestion,
     ApplicationSnippet,
+    ApplicationValidationRepair,
+    ApplicationValidationSummary,
+    ApplicationWarningGroups,
     ApplicationWarningSeverity,
+    ApplicationWritingIntelligence,
+    ApplicationWritingQualityReview,
     CoverLetterDraft,
     CoverLetterParagraphTrace,
     EvidenceSourceType,
     EvidenceSupportType,
     PositioningSummary,
+    RequirementCoverage,
+    RequirementCoverageItem,
     ResumeBullet,
     ResumeBulletGroup,
     SuggestedProofArtifact,
 )
 from app.schemas.career_memory import CompiledCareerMemoryProfile, CompiledEvidenceKind
 from app.schemas.knowledge import DEMO_USER_ID, DurableReviewStatus
+from app.services.application_writing_provider import (
+    ApplicationQuestionInput,
+    ApplicationSnippetOutput,
+    ApplicationWritingDataClassification,
+    ApplicationWritingDataSource,
+    ApplicationWritingErrorCode,
+    ApplicationWritingInput,
+    ApplicationWritingMalformedOutputError,
+    ApplicationWritingOutput,
+    ApplicationWritingProvider,
+    ApplicationWritingProviderError,
+    ApplicationWritingRequirements,
+    ApprovedEnrichmentInput,
+    ApprovedEvidenceAtom,
+    CandidateClaimType,
+    CandidateFacingClaim,
+    ClaimCertainty,
+    ClaimPlanOutput,
+    CoverLetterSectionsOutput,
+    EvidenceAtomSupportType,
+    EvidenceReferenceUsed,
+    JobUnderstandingOutput,
+    MissingProofWarningInput,
+    ProofArtifactInput,
+    RequirementCoverageLevel,
+    ResumeBulletGroupOutput,
+    ResumeBulletOutput,
+    SelectedCompiledMemory,
+    StrategyOutcomeSignal,
+    StructuredOutcome,
+    UnsupportedRequirementOutput,
+    _direct_proof_patterns,
+    _mask_target_role_framing,
+    build_application_writing_provider,
+    sanitize_application_writing_output,
+    validate_application_writing_output_contract,
+)
+from app.services.application_writing_provider import (
+    RequirementCoverageItem as ProviderRequirementCoverageItem,
+)
 from app.services.career_memory_compiler import (
     CareerMemoryCompilationError,
     CareerMemoryCompiler,
@@ -84,7 +137,7 @@ class _EditedClaim:
 class ApplicationPackageService:
     """Create versioned application materials from exact compiled memories."""
 
-    generator_version = "local-deterministic-application-package-v1"
+    generator_version = "application-writing-intelligence-v3"
 
     _requirement_rules: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("Python", (r"\bpython\b",), (r"\bpython\b",)),
@@ -95,13 +148,27 @@ class ApplicationPackageService:
         ("Power BI", (r"\bpower\s*bi\b",), (r"\bpower\s*bi\b",)),
         (
             "data analysis",
-            (r"\bdata analysis\b", r"\banaly[sz](?:e|ed|ing|is)\b"),
-            (r"\bdata analysis\b", r"\banaly[sz](?:e|ed|ing|is)\b"),
+            (
+                r"\banalytics?\b",
+                r"\bdata analysis\b",
+                r"\banalytical workflows?\b",
+                r"\bresearch analysis\b",
+                r"\bstatistical analysis\b",
+                r"\banaly[sz](?:e|ed|ing|is)\b",
+            ),
+            (
+                r"\banalytics?\b",
+                r"\bdata analysis\b",
+                r"\banalytical workflows?\b",
+                r"\bresearch analysis\b",
+                r"\bstatistical analysis\b",
+                r"\banaly[sz](?:e|ed|ing|is)\b",
+            ),
         ),
         (
             "modeling",
-            (r"\bmodel(?:ing|ling)?\b",),
-            (r"\bmodel(?:ing|ling)?\b", r"gaussian fit"),
+            (r"\bmodel(?:s|ed|ing|ling)?\b",),
+            (r"\bmodel(?:s|ed|ing|ling)?\b", r"gaussian fit"),
         ),
         (
             "statistics",
@@ -115,13 +182,34 @@ class ApplicationPackageService:
         ),
         (
             "technical communication",
-            (r"\bcommunicat", r"\bpresent", r"documentation"),
-            (r"\bcommunicat", r"\bpresent", r"documentation", r"report"),
+            (
+                r"\bcommunicat",
+                r"\bpresent",
+                r"\bdocumentation\b",
+                r"\breport(?:ing|s)?\b",
+                r"explaining results",
+            ),
+            (
+                r"\bcommunicat",
+                r"\bpresent",
+                r"\bdocumentation\b",
+                r"\breport(?:ing|s)?\b",
+                r"explaining (?:findings|results)",
+            ),
         ),
         (
             "data quality",
             (r"data quality", r"quality control", r"quality review"),
-            (r"data quality", r"quality control", r"quality review", r"quality cuts"),
+            (
+                r"data quality",
+                r"quality control",
+                r"quality review",
+                r"quality cuts",
+                r"visual inspection",
+                r"categorization",
+                r"review workflow",
+                r"validation",
+            ),
         ),
         (
             "image or data labeling",
@@ -155,6 +243,41 @@ class ApplicationPackageService:
             (r"\bkubernetes\b", r"\bk8s\b"),
         ),
         ("Docker", (r"\bdocker\b",), (r"\bdocker\b",)),
+        ("Java", (r"\bjava\b",), (r"\bjava\b",)),
+        (
+            "LLMs",
+            (r"\bllms?\b", r"large language model"),
+            (r"\bllms?\b", r"large language model"),
+        ),
+        (
+            "RAG",
+            (r"\brag\b", r"retrieval[- ]augmented"),
+            (r"\brag\b", r"retrieval[- ]augmented"),
+        ),
+        (
+            "agents",
+            (r"\bai agents?\b", r"\bagentic\b"),
+            (r"\bai agents?\b", r"\bagentic\b"),
+        ),
+        (
+            "research problem solving",
+            (
+                r"problem solving",
+                r"hypothesis testing",
+                r"research design",
+                r"experimentation",
+                r"debugging",
+                r"interpreting uncertainty",
+            ),
+            (
+                r"problem solving",
+                r"hypothesis",
+                r"research design",
+                r"experiment",
+                r"debug",
+                r"uncertaint",
+            ),
+        ),
         (
             "production ML deployment",
             (
@@ -164,6 +287,11 @@ class ApplicationPackageService:
                 r"\bmlops\b",
             ),
             (r"\bdeploy", r"production model", r"\bmlops\b"),
+        ),
+        (
+            "deployment",
+            (r"\bdeploy(?:ed|ing|ment|ments)?\b",),
+            (r"\bdeploy(?:ed|ing|ment|ments)?\b",),
         ),
         (
             "leadership",
@@ -176,9 +304,13 @@ class ApplicationPackageService:
         self,
         user_id: uuid.UUID = DEMO_USER_ID,
         compiler: CareerMemoryCompiler | None = None,
+        settings: Settings | None = None,
+        writing_provider: ApplicationWritingProvider | None = None,
     ) -> None:
         self.user_id = user_id
         self.compiler = compiler or CareerMemoryCompiler(user_id=user_id)
+        self.settings = settings or get_settings()
+        self.writing_provider = writing_provider
 
     def list_eligible_memories(
         self,
@@ -206,14 +338,27 @@ class ApplicationPackageService:
             )
             .order_by(CanonicalMemoryRecord.updated_at.desc())
         ).all()
+        ready_artifact_memory_ids = set(
+            session.scalars(
+                select(ProofArtifact.source_memory_id).where(
+                    ProofArtifact.user_id == self.user_id,
+                    ProofArtifact.status == "READY",
+                )
+            ).all()
+        )
         options: list[tuple[float, ApplicationPackageMemoryOption]] = []
         target_text = target_role or ""
-        for memory in records:
+        for recency_rank, memory in enumerate(records):
             profile = self.compiler.compile(session, memory.id, target_role)
             ranked = self._rank_profile(profile, target_text)
+            effective_score = ranked.score
+            if target_role:
+                effective_score += max(0.0, 0.04 - recency_rank * 0.005)
+                if memory.id in ready_artifact_memory_ids:
+                    effective_score += 0.08
             options.append(
                 (
-                    ranked.score,
+                    round(min(effective_score, 1.0), 3),
                     ApplicationPackageMemoryOption(
                         id=memory.id,
                         title=memory.title,
@@ -229,6 +374,31 @@ class ApplicationPackageService:
             )
         if target_role:
             options.sort(key=lambda item: item[0], reverse=True)
+            substantive = [
+                (score, option)
+                for score, option in options
+                if option.evidence_count > 0 and option.confidence >= 0.45
+            ]
+            recommendation_count = (
+                min(4, len(substantive)) if len(substantive) >= 2 else 0
+            )
+            if recommendation_count > 2:
+                cutoff_score = substantive[2][0]
+                recommendation_count = min(
+                    4,
+                    max(
+                        2,
+                        sum(
+                            score >= max(cutoff_score * 0.72, 0.12)
+                            for score, _ in substantive
+                        ),
+                    ),
+                )
+            for rank, (_, option) in enumerate(
+                substantive[:recommendation_count], start=1
+            ):
+                option.recommended = True
+                option.recommendation_rank = rank
         return [item for _, item in options]
 
     def create(
@@ -260,6 +430,10 @@ class ApplicationPackageService:
             required_skills=self._clean_list(request.required_skills),
             preferred_skills=self._clean_list(request.preferred_skills),
             responsibilities=self._clean_list(request.responsibilities),
+            application_questions=[
+                question.model_dump(mode="json")
+                for question in request.application_questions
+            ],
             selected_memory_ids=[str(item) for item in request.selected_memory_ids],
             status=ApplicationPackageStatus.DRAFT.value,
         )
@@ -321,6 +495,14 @@ class ApplicationPackageService:
             package.preferred_skills = self._clean_list(request.preferred_skills)
         if "responsibilities" in fields and request.responsibilities is not None:
             package.responsibilities = self._clean_list(request.responsibilities)
+        if (
+            "application_questions" in fields
+            and request.application_questions is not None
+        ):
+            package.application_questions = [
+                question.model_dump(mode="json")
+                for question in request.application_questions
+            ]
         if "selected_memory_ids" in fields and request.selected_memory_ids is not None:
             if request.selected_memory_ids:
                 self._compile_selected(
@@ -341,6 +523,7 @@ class ApplicationPackageService:
             "required_skills",
             "preferred_skills",
             "responsibilities",
+            "application_questions",
             "selected_memory_ids",
         }
         if (
@@ -507,6 +690,15 @@ class ApplicationPackageService:
             latest.compiled_profile_snapshots_json,
             [item.requirement for item in warnings if item.requirement],
         )
+        unsupported_terms = self._unique(
+            [
+                *unsupported_terms,
+                *self._unsupported_outcomes_for_claims(
+                    audited_claims,
+                    latest.compiled_profile_snapshots_json,
+                ),
+            ]
+        )
         cross_memory_terms = self._cross_memory_terms_for_claims(
             audited_claims,
             latest.compiled_profile_snapshots_json,
@@ -529,8 +721,8 @@ class ApplicationPackageService:
                     ApplicationPackageWarning(
                         code="UNSUPPORTED_EDITED_NUMBER",
                         message=(
-                            "Edited text contains numbers not found in approved "
-                            "memory: " + ", ".join(unsupported_numbers) + "."
+                            "Edited text contains numbers not found in the selected "
+                            "source evidence: " + ", ".join(unsupported_numbers) + "."
                         ),
                         severity=ApplicationWarningSeverity.BLOCKING,
                     ),
@@ -618,6 +810,25 @@ class ApplicationPackageService:
                 "unsupported_numbers": unsupported_numbers,
                 "unsupported_terms": unsupported_terms,
                 "cross_memory_terms": cross_memory_terms,
+            },
+            writing_intelligence_json=latest.writing_intelligence_json,
+            quality_review_json=self._evaluate_output_quality(outputs).model_dump(
+                mode="json"
+            ),
+            provider_metadata_json=latest.provider_metadata_json,
+            validation_summary_json={
+                **latest.validation_summary_json,
+                "status": "PASS"
+                if not any(
+                    item.severity == ApplicationWarningSeverity.BLOCKING
+                    for item in warnings
+                )
+                else "BLOCKED",
+                "blocking_issue_count": sum(
+                    item.severity == ApplicationWarningSeverity.BLOCKING
+                    for item in warnings
+                ),
+                "notes": ["User edits were re-audited against the generated baseline."],
             },
             generator_version=self.generator_version,
             generation_reason=ApplicationPackageGenerationReason.USER_EDIT.value,
@@ -713,12 +924,19 @@ class ApplicationPackageService:
                 zip(requested_snippets, outputs.application_snippets, strict=True),
                 start=1,
             ):
+                if (
+                    requested_snippet.question_id != snippet.question_id
+                    or requested_snippet.question != snippet.question
+                ):
+                    raise ApplicationPackageValidationError(
+                        "Snippet edits must preserve generated question IDs and order."
+                    )
                 if requested_snippet.text == snippet.text:
                     continue
                 snippet.text = requested_snippet.text
                 snippet.warnings = self._unique([*snippet.warnings, edit_caveat])
                 changed("application_snippets")
-                changed_claim_ids.add(f"snippet-{index}")
+                changed_claim_ids.add(f"snippet-{snippet.question_id or index}")
 
         if "suggested_proof_artifacts" in request.model_fields_set:
             requested = request.suggested_proof_artifacts
@@ -809,7 +1027,7 @@ class ApplicationPackageService:
                 and trace.source_type != EvidenceSourceType.TARGET_CONTEXT
             )
             add(
-                f"snippet-{index}",
+                f"snippet-{snippet.question_id or index}",
                 "snippet",
                 snippet.text,
                 memory_ids or all_ids,
@@ -827,10 +1045,19 @@ class ApplicationPackageService:
             package.selected_memory_ids = [
                 str(item) for item in request.selected_memory_ids
             ]
+        if request is not None and request.application_questions is not None:
+            package.application_questions = [
+                question.model_dump(mode="json")
+                for question in request.application_questions
+            ]
         selected_ids = self._uuid_list(package.selected_memory_ids)
         if not selected_ids:
             raise ApplicationPackageValidationError(
                 "Select at least one approved Career Memory before generating."
+            )
+        if len(selected_ids) > self.settings.openai_application_max_selected_memories:
+            raise ApplicationPackageValidationError(
+                "Select no more than four Career Memories for a focused draft."
             )
         profiles = self._compile_selected(session, selected_ids, package.role_title)
         target_text = self._target_text(package)
@@ -839,6 +1066,8 @@ class ApplicationPackageService:
             key=lambda item: item.score,
             reverse=True,
         )
+        max_memories = self.settings.openai_application_max_selected_memories
+        writing_ranked = ranked[:max_memories]
         target_snapshot = self._target_snapshot(package)
         profile_snapshots = [item.model_dump(mode="json") for item in profiles]
         fingerprint = self._fingerprint(
@@ -846,25 +1075,135 @@ class ApplicationPackageService:
             selected_ids,
             profile_snapshots,
         )
-        evidence_trace = self._aggregate_evidence_trace(package, ranked)
-        warnings, unsupported_requirements = self._warnings(package, ranked)
-        outputs = self._compose_outputs(
+        evidence_trace = self._aggregate_evidence_trace(package, writing_ranked)
+        warnings, unsupported_requirements = self._warnings(package, writing_ranked)
+        coverage = self._requirement_coverage(package, writing_ranked)
+        writing_input = self._application_writing_input(
             session,
             package,
-            ranked,
+            writing_ranked,
             warnings,
-            unsupported_requirements,
+            coverage,
         )
-        ledger = self._claim_ledger(outputs)
-        memory_ids = [item.profile.memory_id for item in ranked]
+        try:
+            provider = self.writing_provider or build_application_writing_provider(
+                self.settings,
+                local_generator=lambda provider_input: self._local_writing_output(
+                    session,
+                    package,
+                    writing_ranked,
+                    warnings,
+                    unsupported_requirements,
+                    coverage,
+                    provider_input,
+                ),
+            )
+            # The server-authored ledger remains the validation authority. Give the
+            # provider an isolated copy so an in-process implementation cannot
+            # mutate approved atoms before the returned draft is checked.
+            writing_output = provider.generate_application_draft(
+                writing_input.model_copy(deep=True)
+            )
+            writing_output = sanitize_application_writing_output(
+                writing_input,
+                writing_output,
+            )
+            outputs = self._materialize_provider_outputs(
+                session,
+                package,
+                writing_ranked,
+                warnings,
+                coverage,
+                writing_output,
+                writing_input,
+            )
+            self._validate_generated_outputs(
+                outputs,
+                writing_output,
+                writing_input,
+                profile_snapshots,
+                target_snapshot,
+                warnings,
+            )
+        except ApplicationWritingProviderError as exc:
+            session.rollback()
+            raise ApplicationPackageValidationError(exc.safe_message) from exc
+        ledger = self._claim_ledger(
+            outputs,
+            candidate_claims=writing_output.candidate_claims,
+        )
+        intelligence = self._writing_intelligence(
+            package,
+            writing_ranked,
+            coverage,
+            writing_output,
+            outputs,
+        )
+        quality_review = self._evaluate_output_quality(outputs)
+        if writing_output.quality_review_notes:
+            quality_review.notes = self._unique(
+                [*quality_review.notes, *writing_output.quality_review_notes]
+            )[:4]
+            if (
+                quality_review.primary_issue
+                == "No material writing-quality issue detected."
+            ):
+                quality_review.primary_issue = writing_output.quality_review_notes[0]
+        provider_metadata = ApplicationProviderMetadata(
+            provider=writing_output.provider_metadata.provider,
+            model=writing_output.provider_metadata.model,
+            review_model=writing_output.provider_metadata.review_model,
+            review_pass_ran=writing_output.provider_metadata.review_pass_ran,
+            request_id=writing_output.provider_metadata.request_id,
+            input_tokens=writing_output.provider_metadata.input_tokens,
+            cached_input_tokens=(writing_output.provider_metadata.cached_input_tokens),
+            output_tokens=writing_output.provider_metadata.output_tokens,
+            latency_ms=writing_output.provider_metadata.latency_ms,
+        )
+        validation_repairs = [
+            ApplicationValidationRepair.model_validate(repair.model_dump(mode="json"))
+            for repair in writing_output.validation_metadata.repairs
+        ]
+        unsupported_repairs = [
+            repair
+            for repair in validation_repairs
+            if repair.code == "REMOVE_OPTIONAL_UNSUPPORTED_WARNING"
+        ]
+        answer_repairs = [
+            repair
+            for repair in validation_repairs
+            if repair.code == "MISSING_REQUIRED_APPLICATION_ANSWER"
+        ]
+        validation_summary = ApplicationValidationSummary(
+            status="PASS",
+            unsupported_claims_removed=len(unsupported_repairs),
+            blocking_issue_count=0,
+            notes=[
+                "Structured output and evidence references passed server validation.",
+                "Tools, metrics, memory boundaries, and strategy-only signals "
+                "were audited.",
+                *(
+                    ["Optional unsupported warning language was removed and recorded."]
+                    if unsupported_repairs
+                    else []
+                ),
+                *(
+                    ["Missing required application answers were repaired in place."]
+                    if answer_repairs
+                    else []
+                ),
+            ],
+            repairs=validation_repairs,
+        )
+        memory_ids = [item.profile.memory_id for item in writing_ranked]
         enrichment_ids = self._unique_uuid(
             enrichment_id
-            for item in ranked
+            for item in writing_ranked
             for enrichment_id in item.profile.enrichment_ids_used
         )
         outcome_ids = self._unique_uuid(
             signal_id
-            for item in ranked
+            for item in writing_ranked
             for signal_id in item.profile.outcome_signal_ids_used
         )
         version = ApplicationPackageVersion(
@@ -885,6 +1224,10 @@ class ApplicationPackageService:
             enrichment_ids_used_json=[str(item) for item in enrichment_ids],
             outcome_signal_ids_used_json=[str(item) for item in outcome_ids],
             user_edits_json={},
+            writing_intelligence_json=intelligence.model_dump(mode="json"),
+            quality_review_json=quality_review.model_dump(mode="json"),
+            provider_metadata_json=provider_metadata.model_dump(mode="json"),
+            validation_summary_json=validation_summary.model_dump(mode="json"),
             generator_version=self.generator_version,
             generation_reason=reason.value,
         )
@@ -894,6 +1237,1582 @@ class ApplicationPackageService:
         session.commit()
         return self.get(session, package.id)
 
+    def _application_writing_input(
+        self,
+        session: Session,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+        warnings: list[ApplicationPackageWarning],
+        coverage: RequirementCoverage,
+    ) -> ApplicationWritingInput:
+        selected_memories: list[SelectedCompiledMemory] = []
+        enrichment_inputs: list[ApprovedEnrichmentInput] = []
+        outcome_signals: list[StrategyOutcomeSignal] = []
+        for item in ranked:
+            profile = item.profile
+            traces = self._claim_trace_for_profile(profile)
+            reference_ids = [trace.trace_id for trace in traces]
+            selected_memories.append(
+                SelectedCompiledMemory(
+                    memory_id=str(profile.memory_id),
+                    title=profile.canonical_title,
+                    memory_type=profile.memory_type,
+                    summary=self._profile_evidence_summary(profile)[:5000],
+                    approved_claims=self._unique(
+                        [
+                            *profile.proof_claims,
+                            *profile.resume_bullet_claims,
+                            *profile.findings_or_results,
+                        ]
+                    )[:50],
+                    skills_and_tools=self._unique(
+                        [*profile.skills_demonstrated, *profile.tools]
+                    )[:50],
+                    methods=profile.methods[:50],
+                    outcomes=profile.findings_or_results[:25],
+                    evidence_reference_ids=reference_ids[:100],
+                    confidence=profile.confidence,
+                )
+            )
+            for evidence, trace in zip(
+                profile.evidence_used,
+                self._all_profile_trace(profile),
+                strict=False,
+            ):
+                if evidence.kind != CompiledEvidenceKind.APPROVED_ENRICHMENT:
+                    continue
+                enrichment_inputs.append(
+                    ApprovedEnrichmentInput(
+                        enrichment_id=evidence.evidence_id,
+                        memory_id=str(profile.memory_id),
+                        label=evidence.source_label[:300],
+                        content=(evidence.excerpt or "Approved enrichment detail")[
+                            :3000
+                        ],
+                        evidence_reference_ids=[trace.trace_id],
+                    )
+                )
+            outcome_signals.extend(
+                StrategyOutcomeSignal(
+                    signal_id=str(signal.feedback_event_id),
+                    label=signal.summary[:300],
+                    content=f"{signal.guidance} ({signal.caveat})"[:2000],
+                    strategy_only=True,
+                )
+                for signal in profile.outcome_signals[:25]
+            )
+
+        selected_ids = [item.profile.memory_id for item in ranked]
+        artifacts = session.scalars(
+            select(ProofArtifact)
+            .where(
+                ProofArtifact.user_id == self.user_id,
+                ProofArtifact.source_memory_id.in_(selected_ids),
+                ProofArtifact.status == "READY",
+            )
+            .order_by(ProofArtifact.updated_at.desc())
+            .limit(25)
+        ).all()
+        proof_inputs = [
+            ProofArtifactInput(
+                artifact_id=str(artifact.id),
+                title=artifact.title,
+                artifact_type=artifact.artifact_type,
+                summary=f"Existing {artifact.status.lower()} proof artifact.",
+                memory_ids=[str(artifact.source_memory_id)],
+            )
+            for artifact in artifacts
+        ]
+        evidence_ledger = self._application_evidence_ledger(
+            package,
+            ranked,
+            enrichment_inputs,
+            artifacts,
+        )
+        classification = self._application_data_classification(session, selected_ids)
+        unsupported_labels = [item.requirement for item in coverage.unsupported]
+        concrete = {
+            "Python",
+            "SQL",
+            "R",
+            "Java",
+            "AWS",
+            "Azure",
+            "GCP",
+            "Docker",
+            "Kubernetes",
+            "cloud infrastructure",
+            "deployment",
+            "production ML deployment",
+            "LLMs",
+            "RAG",
+            "agents",
+            "Tableau",
+            "Power BI",
+        }
+        requested = [
+            item.requirement
+            for group in (
+                coverage.strongly_supported,
+                coverage.partially_supported,
+                coverage.unsupported,
+                coverage.not_relevant_enough,
+            )
+            for item in group
+        ]
+        return ApplicationWritingInput(
+            target_role=package.role_title,
+            company=package.company,
+            job_description=package.target_description[:30_000],
+            grouped_requirements=ApplicationWritingRequirements(
+                must_have=package.required_skills[:50],
+                preferred=package.preferred_skills[:50],
+                technical=[label for label in requested if label in concrete][:50],
+                communication=[
+                    label for label in requested if "communication" in label.casefold()
+                ][:50],
+                concrete_tools_requiring_direct_proof=[
+                    label for label in requested if label in concrete
+                ][:50],
+                broad_semantic_concepts=[
+                    label for label in requested if label not in concrete
+                ][:50],
+            ),
+            central_responsibilities=package.responsibilities[:50],
+            application_questions=[
+                ApplicationQuestionInput.model_validate(question)
+                for question in package.application_questions
+            ],
+            selected_memories=selected_memories,
+            evidence_ledger=evidence_ledger,
+            approved_enrichment=enrichment_inputs[:50],
+            proof_artifacts=proof_inputs,
+            outcome_signals=outcome_signals[:25],
+            prohibited_claims=self._unique(
+                [
+                    *(
+                        warning
+                        for item in ranked
+                        for warning in item.profile.warnings_not_to_claim
+                    ),
+                    *(
+                        f"Do not claim unsupported {label}."
+                        for label in unsupported_labels
+                    ),
+                ]
+            )[:100],
+            missing_proof_warnings=[
+                MissingProofWarningInput(
+                    requirement=warning.requirement or warning.code,
+                    explanation=warning.message,
+                    blocking_if_claimed=warning.code.startswith("UNSUPPORTED"),
+                )
+                for warning in warnings
+                if warning.severity != ApplicationWarningSeverity.INFO
+            ][:50],
+            desired_tone="direct, professional, internship-appropriate, and natural",
+            desired_output_length=(
+                "250-400 word letter; 20-35 word bullets; concise answers"
+            ),
+            generator_version=self.generator_version,
+            data_classification=classification,
+        )
+
+    def _application_evidence_ledger(
+        self,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+        enrichment_inputs: list[ApprovedEnrichmentInput],
+        artifacts: list[ProofArtifact],
+    ) -> list[ApprovedEvidenceAtom]:
+        """Compile an immutable, order-independent claim ledger for the writer."""
+
+        target_snapshot = self._target_snapshot(package)
+        target_source = json.dumps(
+            target_snapshot,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        company = f" at {package.company}" if package.company else ""
+        atoms = [
+            ApprovedEvidenceAtom(
+                evidence_atom_id=self._stable_contract_id(
+                    "atom-target", str(package.id), target_source
+                ),
+                approved_claim_id=self._stable_contract_id(
+                    "claim-target", str(package.id), target_source
+                ),
+                support_type=EvidenceAtomSupportType.TARGET_CONTEXT,
+                factual_statement=(
+                    f"The target is the {package.role_title} role{company}."
+                ),
+                allowed_certainty=ClaimCertainty.ASPIRATIONAL,
+                prohibited_expansions=[
+                    "Target-job wording is relevance context, not candidate proof."
+                ],
+            )
+        ]
+
+        ranked_by_memory = {str(item.profile.memory_id): item for item in ranked}
+        for item in ranked:
+            profile = item.profile
+            memory_id = str(profile.memory_id)
+            references = sorted(
+                self._unique(
+                    trace.trace_id for trace in self._factual_trace_for_profile(profile)
+                )
+            )[:100]
+            tools = self._unique(
+                [*profile.tools, *profile.skills_demonstrated, *profile.methods]
+            )[:50]
+            methods = self._unique(profile.methods)[:50]
+            prohibitions = self._unique(profile.warnings_not_to_claim)[:50]
+            context = self._profile_evidence_summary(profile)[:5000]
+            atoms.append(
+                ApprovedEvidenceAtom(
+                    evidence_atom_id=self._stable_contract_id(
+                        "atom-memory", memory_id, "context", context
+                    ),
+                    canonical_memory_id=memory_id,
+                    approved_claim_id=self._stable_contract_id(
+                        "claim-memory", memory_id, "context", context
+                    ),
+                    evidence_reference_ids=references,
+                    support_type=EvidenceAtomSupportType.DIRECT,
+                    factual_statement=context,
+                    supported_tools=tools,
+                    supported_methods=methods,
+                    allowed_certainty=ClaimCertainty.OBSERVED,
+                    prohibited_expansions=prohibitions,
+                )
+            )
+            component_statements: list[tuple[str, str]] = []
+            if profile.research_question_or_problem:
+                component_statements.append(
+                    ("problem", profile.research_question_or_problem)
+                )
+            component_statements.extend(
+                ("input", value) for value in profile.data_or_inputs
+            )
+            component_statements.extend(
+                ("workflow", value) for value in profile.workflow_steps
+            )
+            component_statements.extend(
+                ("limitation", value) for value in profile.limitations
+            )
+            for component_kind, statement in component_statements:
+                rendered_statement = " ".join(statement.split()).strip()
+                if not rendered_statement:
+                    continue
+                atoms.append(
+                    ApprovedEvidenceAtom(
+                        evidence_atom_id=self._stable_contract_id(
+                            "atom-component",
+                            memory_id,
+                            component_kind,
+                            rendered_statement,
+                        ),
+                        canonical_memory_id=memory_id,
+                        approved_claim_id=self._stable_contract_id(
+                            "claim-component",
+                            memory_id,
+                            component_kind,
+                            rendered_statement,
+                        ),
+                        evidence_reference_ids=references,
+                        support_type=EvidenceAtomSupportType.DIRECT,
+                        factual_statement=rendered_statement[:5000],
+                        supported_tools=self._tools_explicit_in_text(
+                            profile, rendered_statement
+                        ),
+                        supported_methods=[
+                            method
+                            for method in profile.methods
+                            if self._literal_in_text(method, rendered_statement)
+                        ][:50],
+                        allowed_certainty=self._claim_certainty(rendered_statement),
+                        prohibited_expansions=prohibitions,
+                    )
+                )
+            approved_claims = self._unique(
+                [*profile.proof_claims, *profile.resume_bullet_claims]
+            )
+            for claim in approved_claims:
+                atoms.append(
+                    ApprovedEvidenceAtom(
+                        evidence_atom_id=self._stable_contract_id(
+                            "atom-claim", memory_id, claim
+                        ),
+                        canonical_memory_id=memory_id,
+                        approved_claim_id=self._stable_contract_id(
+                            "claim-approved", memory_id, claim
+                        ),
+                        evidence_reference_ids=references,
+                        support_type=EvidenceAtomSupportType.DIRECT,
+                        factual_statement=claim[:5000],
+                        supported_tools=tools,
+                        supported_methods=methods,
+                        allowed_certainty=self._claim_certainty(claim),
+                        prohibited_expansions=prohibitions,
+                    )
+                )
+            for outcome_text in self._unique(profile.findings_or_results):
+                outcome_source_id = references[0] if references else memory_id
+                outcome = self._structured_outcome(outcome_text, outcome_source_id)
+                atoms.append(
+                    ApprovedEvidenceAtom(
+                        evidence_atom_id=self._stable_contract_id(
+                            "atom-outcome",
+                            memory_id,
+                            outcome_source_id,
+                            outcome_text,
+                        ),
+                        canonical_memory_id=memory_id,
+                        approved_claim_id=self._stable_contract_id(
+                            "claim-outcome", memory_id, outcome_text
+                        ),
+                        evidence_reference_ids=references,
+                        support_type=EvidenceAtomSupportType.DIRECT,
+                        factual_statement=outcome_text[:5000],
+                        supported_tools=tools,
+                        supported_methods=methods,
+                        supported_outcome=outcome,
+                        allowed_certainty=outcome.certainty,
+                        prohibited_expansions=prohibitions,
+                    )
+                )
+
+        for enrichment in enrichment_inputs:
+            ranked_item = ranked_by_memory.get(enrichment.memory_id)
+            profile = ranked_item.profile if ranked_item is not None else None
+            content = enrichment.content[:5000]
+            atoms.append(
+                ApprovedEvidenceAtom(
+                    evidence_atom_id=self._stable_contract_id(
+                        "atom-enrichment",
+                        enrichment.memory_id,
+                        enrichment.enrichment_id,
+                        content,
+                    ),
+                    canonical_memory_id=enrichment.memory_id,
+                    enrichment_id=enrichment.enrichment_id,
+                    approved_claim_id=self._stable_contract_id(
+                        "claim-enrichment",
+                        enrichment.memory_id,
+                        enrichment.enrichment_id,
+                        content,
+                    ),
+                    evidence_reference_ids=enrichment.evidence_reference_ids,
+                    support_type=EvidenceAtomSupportType.APPROVED_ENRICHMENT,
+                    factual_statement=content,
+                    supported_tools=(
+                        self._tools_explicit_in_text(profile, content)
+                        if profile is not None
+                        else []
+                    ),
+                    supported_methods=(
+                        [
+                            method
+                            for method in profile.methods
+                            if self._literal_in_text(method, content)
+                        ][:50]
+                        if profile is not None
+                        else []
+                    ),
+                    allowed_certainty=self._claim_certainty(content),
+                    prohibited_expansions=(
+                        self._unique(profile.warnings_not_to_claim)[:50]
+                        if profile is not None
+                        else []
+                    ),
+                )
+            )
+
+        for artifact in artifacts:
+            artifact_statement = (
+                f"A ready {artifact.artifact_type} proof artifact titled "
+                f"{artifact.title} exists for the selected memory."
+            )
+            memory_id = str(artifact.source_memory_id)
+            atoms.append(
+                ApprovedEvidenceAtom(
+                    evidence_atom_id=self._stable_contract_id(
+                        "atom-artifact", str(artifact.id), artifact_statement
+                    ),
+                    canonical_memory_id=memory_id,
+                    proof_artifact_id=str(artifact.id),
+                    approved_claim_id=self._stable_contract_id(
+                        "claim-artifact", str(artifact.id), artifact_statement
+                    ),
+                    support_type=EvidenceAtomSupportType.PROOF_ARTIFACT,
+                    factual_statement=artifact_statement,
+                    allowed_certainty=ClaimCertainty.OBSERVED,
+                    prohibited_expansions=[
+                        "Artifact availability does not add tools, metrics, or "
+                        "outcomes."
+                    ],
+                )
+            )
+
+        if len(atoms) > 250:
+            raise ApplicationPackageValidationError(
+                "Selected evidence expands beyond the application-writer claim limit."
+            )
+        return atoms
+
+    @staticmethod
+    def _claim_certainty(value: str) -> ClaimCertainty:
+        lowered = value.casefold()
+        if any(
+            token in lowered for token in ("exploratory", "explored", "investigated")
+        ):
+            return ClaimCertainty.EXPLORATORY
+        if any(
+            token in lowered
+            for token in (
+                "inconclusive",
+                "no clear",
+                "uncertain",
+                "ambiguous",
+                "qualitative",
+                "without overstating",
+            )
+        ):
+            return ClaimCertainty.QUALIFIED
+        if any(token in lowered for token in ("resulted in", "led to", "drove")):
+            return ClaimCertainty.CAUSAL
+        return ClaimCertainty.OBSERVED
+
+    @classmethod
+    def _structured_outcome(
+        cls,
+        value: str,
+        evidence_source_id: str,
+    ) -> StructuredOutcome:
+        rendered = " ".join(value.split()).strip().rstrip(".")
+        action_pattern = re.compile(
+            r"\b(?:improv\w*|increas\w*|reduc\w*|boost\w*|sav(?:ed|ing)|"
+            r"earn\w*|won|achiev\w*|accelerat\w*|resulted\s+in|led\s+to|"
+            r"drove|produced|helped|showed|found|reported|documented)\b",
+            re.I,
+        )
+        match = action_pattern.search(rendered)
+        if match is None:
+            parts = rendered.split(maxsplit=1)
+            action = parts[0] if parts else "reported"
+            object_text = parts[1] if len(parts) > 1 else rendered
+        else:
+            action = match.group(0)
+            object_text = rendered[match.end() :].strip(" :,-") or rendered
+        metric_match = re.search(
+            r"(?<!\w)(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+            r"(?:%|[kmbx])?(?!\w)",
+            rendered,
+            re.I,
+        )
+        qualifier = None
+        lowered = rendered.casefold()
+        if "no clear" in lowered:
+            qualifier = "no clear result"
+        elif "inconclusive" in lowered:
+            qualifier = "inconclusive result"
+        elif "qualitative" in lowered:
+            qualifier = "qualitative result"
+        return StructuredOutcome(
+            evidence_source_id=evidence_source_id,
+            action=action,
+            object=object_text[:500],
+            outcome=rendered[:1000],
+            qualifier=qualifier,
+            certainty=cls._claim_certainty(rendered),
+            metric=metric_match.group(0) if metric_match else None,
+        )
+
+    @classmethod
+    def _tools_explicit_in_text(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        value: str,
+    ) -> list[str]:
+        return [
+            tool
+            for tool in cls._unique(
+                [*profile.tools, *profile.skills_demonstrated, *profile.methods]
+            )
+            if cls._literal_in_text(tool, value)
+        ][:50]
+
+    @staticmethod
+    def _literal_in_text(label: str, value: str) -> bool:
+        normalized = " ".join(label.split()).strip()
+        if not normalized:
+            return False
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(normalized)}(?![A-Za-z0-9_])",
+                value,
+                re.I,
+            )
+        )
+
+    def _application_data_classification(
+        self,
+        session: Session,
+        memory_ids: list[uuid.UUID],
+    ) -> ApplicationWritingDataClassification:
+        memories = session.scalars(
+            select(CanonicalMemoryRecord).where(
+                CanonicalMemoryRecord.user_id == self.user_id,
+                CanonicalMemoryRecord.id.in_(memory_ids),
+            )
+        ).all()
+        is_demo = bool(memories) and all(
+            memory.structured_fields.get("demo_profile") is True for memory in memories
+        )
+        profile_names = self._unique(
+            str(memory.structured_fields.get("demo_candidate_name") or "").strip()
+            for memory in memories
+            if memory.structured_fields.get("demo_candidate_name")
+        )
+        return ApplicationWritingDataClassification(
+            profile_id=(
+                str(memories[0].structured_fields.get("demo_profile_id"))
+                if is_demo and memories[0].structured_fields.get("demo_profile_id")
+                else str(self.user_id)
+            ),
+            profile_name=(profile_names[0] if profile_names else "CareerOS profile"),
+            is_demo=is_demo,
+            source=(
+                ApplicationWritingDataSource.SEEDED_FICTIONAL
+                if is_demo
+                else ApplicationWritingDataSource.PERSONAL
+            ),
+        )
+
+    def _local_writing_output(
+        self,
+        session: Session,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+        warnings: list[ApplicationPackageWarning],
+        unsupported_requirements: list[str],
+        coverage: RequirementCoverage,
+        writing_input: ApplicationWritingInput,
+    ) -> ApplicationWritingOutput:
+        outputs = self._compose_outputs(
+            session,
+            package,
+            ranked,
+            warnings,
+            unsupported_requirements,
+            writing_input.application_questions,
+        )
+        primary = ranked[0]
+        provider_coverage: list[ProviderRequirementCoverageItem] = []
+        for level, items in (
+            (RequirementCoverageLevel.STRONGLY_SUPPORTED, coverage.strongly_supported),
+            (
+                RequirementCoverageLevel.PARTIALLY_SUPPORTED,
+                coverage.partially_supported,
+            ),
+            (RequirementCoverageLevel.UNSUPPORTED, coverage.unsupported),
+            (RequirementCoverageLevel.NOT_RELEVANT, coverage.not_relevant_enough),
+        ):
+            for item in items:
+                refs = self._unique(
+                    trace.trace_id
+                    for ranked_item in ranked
+                    if ranked_item.profile.memory_id in item.memory_ids
+                    for trace in self._claim_trace_for_profile(ranked_item.profile)
+                )
+                provider_coverage.append(
+                    ProviderRequirementCoverageItem(
+                        requirement=item.requirement,
+                        level=level,
+                        explanation=(
+                            item.evidence[0]
+                            if item.evidence
+                            else "No direct selected proof is currently available."
+                        ),
+                        evidence_reference_ids=refs[:30],
+                    )
+                )
+        resume_groups = [
+            ResumeBulletGroupOutput(
+                memory_id=str(group.memory_id),
+                heading=group.section_suggestion,
+                bullets=[
+                    ResumeBulletOutput(
+                        text=bullet.bullet_text,
+                        evidence_reference_ids=[
+                            trace.trace_id
+                            for trace in bullet.evidence_trace
+                            if trace.support_type == EvidenceSupportType.DIRECT
+                        ][:20],
+                    )
+                    for bullet in group.bullets
+                ],
+            )
+            for group in outputs.resume_bullets
+        ]
+        cover = outputs.cover_letter
+        cover_refs = self._unique(
+            trace.trace_id
+            for paragraph in cover.evidence_trace_by_paragraph
+            for trace in paragraph.evidence_trace
+            if trace.memory_id is not None
+            and trace.support_type == EvidenceSupportType.DIRECT
+        )
+        fallback_answer_atom = next(
+            atom
+            for atom in writing_input.evidence_ledger
+            if atom.canonical_memory_id == str(primary.profile.memory_id)
+            and atom.support_type
+            in {
+                EvidenceAtomSupportType.DIRECT,
+                EvidenceAtomSupportType.APPROVED_ENRICHMENT,
+            }
+        )
+        snippets = [
+            ApplicationSnippetOutput(
+                question_id=snippet.question_id,
+                answer=snippet.text,
+                evidence_reference_ids=[
+                    trace.trace_id
+                    for trace in snippet.evidence_trace
+                    if trace.memory_id is not None
+                    and trace.support_type == EvidenceSupportType.DIRECT
+                ][:20],
+                evidence_atom_ids=[fallback_answer_atom.evidence_atom_id],
+                tools_claimed=[],
+                outcome_claimed=None,
+                certainty=fallback_answer_atom.allowed_certainty,
+            )
+            for snippet in outputs.application_snippets
+        ]
+        used_refs = self._unique(
+            [
+                *(
+                    ref
+                    for group in resume_groups
+                    for bullet in group.bullets
+                    for ref in bullet.evidence_reference_ids
+                ),
+                *cover_refs,
+                *(
+                    ref
+                    for snippet in snippets
+                    for ref in snippet.evidence_reference_ids
+                ),
+            ]
+        )
+        memory_by_ref = {
+            trace.trace_id: str(item.profile.memory_id)
+            for item in ranked
+            for trace in self._claim_trace_for_profile(item.profile)
+        }
+        primary_evidence = cover.body_paragraphs[0]
+        secondary_evidence = (
+            cover.body_paragraphs[1]
+            if len(cover.body_paragraphs) > 1
+            else cover.body_paragraphs[0]
+        )
+        cover_sections = CoverLetterSectionsOutput(
+            opening=cover.opening_paragraph,
+            primary_evidence=primary_evidence,
+            secondary_evidence=secondary_evidence,
+            closing=cover.closing_paragraph,
+            full_text="\n\n".join(
+                [
+                    cover.opening_paragraph,
+                    primary_evidence,
+                    secondary_evidence,
+                    cover.closing_paragraph,
+                ]
+            ),
+            evidence_reference_ids=cover_refs[:40],
+        )
+        draft = ApplicationWritingOutput(
+            job_understanding=self._job_understanding_output(package, coverage),
+            requirement_coverage=provider_coverage,
+            claim_plan=ClaimPlanOutput(
+                primary_positioning=outputs.positioning_summary.primary_positioning,
+                primary_proof_memory_id=str(primary.profile.memory_id),
+                secondary_proof_memory_ids=[
+                    str(item.profile.memory_id) for item in ranked[1:3]
+                ],
+                supported_requirements=[
+                    item.requirement for item in coverage.strongly_supported
+                ],
+                partially_supported_requirements=[
+                    item.requirement for item in coverage.partially_supported
+                ],
+                unsupported_requirements=[
+                    item.requirement for item in coverage.unsupported
+                ],
+                claims_not_to_make=outputs.positioning_summary.do_not_claim,
+                missing_evidence=outputs.positioning_summary.risks_and_gaps,
+                resume_strategy="Use one evidence-backed idea per concise bullet.",
+                cover_letter_strategy=(
+                    "Connect the strongest two proof points in a natural narrative."
+                ),
+                snippet_strategy="Answer directly with one relevant example.",
+                tone=writing_input.desired_tone,
+            ),
+            unsupported_requirements=[
+                UnsupportedRequirementOutput(
+                    requirement=item.requirement,
+                    explanation=(
+                        item.evidence[0]
+                        if item.evidence
+                        else "No direct selected proof is currently available."
+                    ),
+                    must_not_be_claimed=True,
+                )
+                for item in coverage.unsupported
+            ],
+            positioning_summary=outputs.positioning_summary.primary_positioning,
+            resume_bullet_groups=resume_groups,
+            cover_letter=cover_sections,
+            application_snippets=snippets,
+            reviewer_questions=outputs.reviewer_questions,
+            evidence_references_used=[
+                EvidenceReferenceUsed(
+                    evidence_reference_id=reference,
+                    memory_id=memory_by_ref[reference],
+                    usage="Supports application-writing output.",
+                )
+                for reference in used_refs
+                if reference in memory_by_ref
+            ],
+            unsupported_claim_candidates=[],
+            strategy_notes=cover.strategy_notes,
+            quality_review_notes=self._evaluate_output_quality(outputs).notes,
+        )
+        claims = self._local_candidate_claims(draft, writing_input, ranked)
+        claim_by_path = {claim.field_path: claim for claim in claims}
+        aligned_snippets = []
+        for index, snippet in enumerate(draft.application_snippets):
+            claim = claim_by_path[f"application_snippets.{index}.answer"]
+            aligned_snippets.append(
+                snippet.model_copy(
+                    update={
+                        "evidence_atom_ids": claim.evidence_atom_ids,
+                        "tools_claimed": claim.tools_claimed,
+                        "outcome_claimed": claim.outcome_claimed,
+                        "certainty": claim.certainty,
+                    }
+                )
+            )
+        return draft.model_copy(
+            update={
+                "application_snippets": aligned_snippets,
+                "candidate_claims": claims,
+            }
+        )
+
+    def _local_candidate_claims(
+        self,
+        draft: ApplicationWritingOutput,
+        writing_input: ApplicationWritingInput,
+        ranked: list[_RankedProfile],
+    ) -> list[CandidateFacingClaim]:
+        """Attach one immutable claim contract to every local candidate surface."""
+
+        claims: list[CandidateFacingClaim] = []
+        primary_id = str(ranked[0].profile.memory_id)
+
+        def add(
+            field_path: str,
+            text: str,
+            claim_type: CandidateClaimType,
+            memory_ids: Iterable[str],
+            *,
+            include_target: bool = False,
+        ) -> None:
+            atoms = self._local_claim_atoms(
+                writing_input,
+                text,
+                set(memory_ids),
+                include_target=include_target,
+            )
+            outcome_atom = self._matching_outcome_atom(text, atoms)
+            if outcome_atom is not None and outcome_atom.supported_outcome is not None:
+                certainty = outcome_atom.supported_outcome.certainty
+            else:
+                factual_atoms = [
+                    atom
+                    for atom in atoms
+                    if atom.support_type
+                    in {
+                        EvidenceAtomSupportType.DIRECT,
+                        EvidenceAtomSupportType.APPROVED_ENRICHMENT,
+                        EvidenceAtomSupportType.PROOF_ARTIFACT,
+                    }
+                ]
+                certainty_order = list(ClaimCertainty)
+                certainty = (
+                    min(
+                        (atom.allowed_certainty for atom in factual_atoms),
+                        key=certainty_order.index,
+                    )
+                    if factual_atoms
+                    else ClaimCertainty.ASPIRATIONAL
+                )
+            claims.append(
+                CandidateFacingClaim(
+                    field_path=field_path,
+                    claim_text=text,
+                    evidence_atom_ids=[atom.evidence_atom_id for atom in atoms],
+                    claim_type=claim_type,
+                    tools_claimed=[
+                        label
+                        for label, pattern in _direct_proof_patterns(
+                            writing_input.grouped_requirements.concrete_tools_requiring_direct_proof
+                        ).items()
+                        if pattern.search(
+                            _mask_target_role_framing(
+                                text,
+                                writing_input.target_role,
+                                atoms,
+                                writing_input.company,
+                            )
+                        )
+                    ],
+                    outcome_claimed=(
+                        outcome_atom.supported_outcome
+                        if outcome_atom is not None
+                        else None
+                    ),
+                    certainty=certainty,
+                )
+            )
+
+        add(
+            "positioning_summary",
+            draft.positioning_summary,
+            CandidateClaimType.POSITIONING,
+            (primary_id,),
+        )
+        for group_index, group in enumerate(draft.resume_bullet_groups):
+            for bullet_index, bullet in enumerate(group.bullets):
+                add(
+                    f"resume_bullet_groups.{group_index}.bullets.{bullet_index}.text",
+                    bullet.text,
+                    CandidateClaimType.RESUME_BULLET,
+                    (group.memory_id,),
+                )
+
+        secondary_id = (
+            str(ranked[1].profile.memory_id) if len(ranked) > 1 else primary_id
+        )
+        add(
+            "cover_letter.opening",
+            draft.cover_letter.opening,
+            CandidateClaimType.COVER_LETTER,
+            (primary_id,),
+            include_target=True,
+        )
+        add(
+            "cover_letter.primary_evidence",
+            draft.cover_letter.primary_evidence,
+            CandidateClaimType.COVER_LETTER,
+            (primary_id,),
+        )
+        add(
+            "cover_letter.secondary_evidence",
+            draft.cover_letter.secondary_evidence,
+            CandidateClaimType.COVER_LETTER,
+            (secondary_id,),
+        )
+        add(
+            "cover_letter.closing",
+            draft.cover_letter.closing,
+            CandidateClaimType.COVER_LETTER,
+            (),
+            include_target=True,
+        )
+        question_by_id = {
+            question.question_id: question
+            for question in writing_input.application_questions
+        }
+        for snippet_index, snippet in enumerate(draft.application_snippets):
+            question = question_by_id[snippet.question_id]
+            add(
+                f"application_snippets.{snippet_index}.answer",
+                snippet.answer,
+                CandidateClaimType.APPLICATION_ANSWER,
+                (primary_id,),
+                include_target=self._is_motivation_question(question),
+            )
+        return claims
+
+    def _local_claim_atoms(
+        self,
+        writing_input: ApplicationWritingInput,
+        text: str,
+        memory_ids: set[str],
+        *,
+        include_target: bool,
+    ) -> list[ApprovedEvidenceAtom]:
+        normalized_role = " ".join(writing_input.target_role.split()).strip()
+        include_target = include_target or bool(
+            normalized_role and re.search(re.escape(normalized_role), text, re.I)
+        )
+        eligible = [
+            atom
+            for atom in writing_input.evidence_ledger
+            if (
+                atom.canonical_memory_id in memory_ids
+                or (
+                    include_target
+                    and atom.support_type is EvidenceAtomSupportType.TARGET_CONTEXT
+                )
+            )
+        ]
+        selected: list[ApprovedEvidenceAtom] = []
+        if include_target:
+            selected.extend(
+                atom
+                for atom in eligible
+                if atom.support_type is EvidenceAtomSupportType.TARGET_CONTEXT
+            )
+        text_terms = self._contract_terms(text)
+        for memory_id in sorted(memory_ids):
+            candidates = [
+                atom
+                for atom in eligible
+                if atom.canonical_memory_id == memory_id
+                and atom.support_type
+                in {
+                    EvidenceAtomSupportType.DIRECT,
+                    EvidenceAtomSupportType.APPROVED_ENRICHMENT,
+                    EvidenceAtomSupportType.PROOF_ARTIFACT,
+                }
+                and atom.supported_outcome is None
+            ]
+            scored = sorted(
+                (
+                    (
+                        len(self._contract_terms(atom.factual_statement) & text_terms),
+                        atom,
+                    )
+                    for atom in candidates
+                ),
+                key=lambda item: (-item[0], item[1].evidence_atom_id),
+            )
+            matching = [atom for score, atom in scored if score >= 2]
+            if not matching and scored:
+                matching = [scored[0][1]]
+            selected.extend(matching[:10])
+
+        outcome_atom = self._matching_outcome_atom(text, eligible)
+        if outcome_atom is not None:
+            selected.append(outcome_atom)
+        unique: list[ApprovedEvidenceAtom] = []
+        seen: set[str] = set()
+        for atom in selected:
+            if atom.evidence_atom_id in seen:
+                continue
+            seen.add(atom.evidence_atom_id)
+            unique.append(atom)
+        if not unique:
+            raise ApplicationPackageValidationError(
+                "Local candidate text could not be linked to an evidence atom."
+            )
+        return unique[:20]
+
+    @classmethod
+    def _matching_outcome_atom(
+        cls,
+        text: str,
+        atoms: Iterable[ApprovedEvidenceAtom],
+    ) -> ApprovedEvidenceAtom | None:
+        if not re.search(
+            r"\b(?:improv\w*|increas\w*|reduc\w*|boost\w*|sav(?:ed|ing)|"
+            r"earn\w*|won|achiev\w*|accelerat\w*|resulted\s+in|led\s+to|"
+            r"drove|(?:i|we|analysis|study|research|results?|findings?|comparison|"
+            r"model|evaluation)\s+(?:found|show(?:ed|n|s)?|observ(?:e|ed|es)|"
+            r"report(?:ed|s)?)|impact\w*|perform(?:ance|ed|ing)?)\b",
+            text,
+            re.I,
+        ):
+            return None
+        text_terms = cls._contract_terms(text)
+        candidates = [atom for atom in atoms if atom.supported_outcome is not None]
+        scored = sorted(
+            (
+                (
+                    len(cls._contract_terms(atom.supported_outcome.object) & text_terms)
+                    / max(len(cls._contract_terms(atom.supported_outcome.object)), 1),
+                    atom,
+                )
+                for atom in candidates
+                if atom.supported_outcome is not None
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        return scored[0][1] if scored and scored[0][0] >= 0.6 else None
+
+    @staticmethod
+    def _contract_terms(value: str) -> set[str]:
+        stop = {"a", "an", "and", "for", "in", "of", "the", "to", "with"}
+        return {
+            token
+            for token in re.findall(r"[a-z][a-z0-9+-]{1,}", value.casefold())
+            if token not in stop
+        }
+
+    @staticmethod
+    def _concrete_tools_in_text(value: str) -> list[str]:
+        patterns = (
+            ("python", r"\bpython\b"),
+            ("sql", r"\bsql\b"),
+            ("r", r"(?<![a-z])r(?![a-z])"),
+            ("aws", r"\baws\b"),
+            ("azure", r"\bazure\b"),
+            ("gcp", r"\b(?:gcp|google cloud)\b"),
+            ("kubernetes", r"\b(?:kubernetes|k8s)\b"),
+            ("docker", r"\bdocker\b"),
+            ("tableau", r"\btableau\b"),
+            ("power bi", r"\bpower\s*bi\b"),
+            (
+                "production deployment",
+                r"\b(?:production(?:-grade)?\s+)?deploy(?:ed|ing|ment|ments)?\b",
+            ),
+            ("model monitoring", r"\bmodel\s+monitor(?:ing|ed)?\b"),
+            ("cloud infrastructure", r"\bcloud\s+infrastructure\b"),
+        )
+        return [label for label, pattern in patterns if re.search(pattern, value, re.I)]
+
+    def _job_understanding_output(
+        self,
+        package: ApplicationPackage,
+        coverage: RequirementCoverage,
+    ) -> JobUnderstandingOutput:
+        requested = [
+            item.requirement
+            for group in (
+                coverage.strongly_supported,
+                coverage.partially_supported,
+                coverage.unsupported,
+                coverage.not_relevant_enough,
+            )
+            for item in group
+        ]
+        concrete_names = {
+            "python",
+            "sql",
+            "r",
+            "java",
+            "aws",
+            "azure",
+            "gcp",
+            "docker",
+            "kubernetes",
+            "cloud infrastructure",
+            "deployment",
+            "production ml deployment",
+            "llms",
+            "rag",
+            "agents",
+            "tableau",
+            "power bi",
+        }
+        concrete = [item for item in requested if item.casefold() in concrete_names]
+        communication = [
+            item
+            for item in requested
+            if any(
+                token in item.casefold()
+                for token in ("communication", "report", "presentation", "document")
+            )
+        ]
+        central = (
+            package.responsibilities[0]
+            if package.responsibilities
+            else (
+                "Support the central responsibilities of the "
+                f"{package.role_title} role."
+            )
+        )
+        return JobUnderstandingOutput(
+            role_family=self._role_family(package.role_title),
+            seniority=self._role_seniority(package.role_title),
+            central_objective=central,
+            core_responsibilities=package.responsibilities[:20],
+            must_have_requirements=package.required_skills[:30],
+            preferred_requirements=package.preferred_skills[:30],
+            technical_expectations=[
+                item for item in requested if item not in communication
+            ][:30],
+            communication_expectations=communication[:20],
+            concrete_tools_requiring_direct_proof=concrete[:30],
+            broad_semantic_concepts=[
+                item for item in requested if item.casefold() not in concrete_names
+            ][:30],
+        )
+
+    def _materialize_provider_outputs(
+        self,
+        session: Session,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+        warnings: list[ApplicationPackageWarning],
+        coverage: RequirementCoverage,
+        writing_output: ApplicationWritingOutput,
+        writing_input: ApplicationWritingInput,
+    ) -> ApplicationPackageOutputs:
+        ranked_by_id = {str(item.profile.memory_id): item for item in ranked}
+        trace_map = {
+            trace.trace_id: trace
+            for item in ranked
+            for trace in self._claim_trace_for_profile(item.profile)
+        }
+        resume_groups: list[ResumeBulletGroup] = []
+        for group in writing_output.resume_bullet_groups:
+            ranked_item = ranked_by_id.get(group.memory_id)
+            if ranked_item is None:
+                self._raise_invalid_provider_draft(
+                    "The writer referenced an unselected memory."
+                )
+            assert ranked_item is not None
+            bullets: list[ResumeBullet] = []
+            for bullet in group.bullets:
+                traces = self._provider_traces(
+                    bullet.evidence_reference_ids,
+                    trace_map,
+                    expected_memory_id=ranked_item.profile.memory_id,
+                )
+                bullets.append(
+                    ResumeBullet(
+                        # Preserve the exact candidate surface covered by the
+                        # provider claim contract. Validation already enforces the
+                        # text/metadata pairing before materialization.
+                        bullet_text=bullet.text,
+                        evidence_trace=traces,
+                        confidence=ranked_item.profile.confidence,
+                        warnings=[],
+                        why_this_bullet=ranked_item.target_reason,
+                    )
+                )
+            if bullets:
+                resume_groups.append(
+                    ResumeBulletGroup(
+                        section_suggestion=self._section_suggestion(
+                            ranked_item.profile.memory_type
+                        ),
+                        memory_id=ranked_item.profile.memory_id,
+                        memory_title=ranked_item.profile.canonical_title,
+                        target_reason=ranked_item.target_reason,
+                        bullets=bullets,
+                    )
+                )
+
+        primary = ranked_by_id.get(
+            writing_output.claim_plan.primary_proof_memory_id,
+            ranked[0],
+        )
+        secondary_items = [
+            ranked_by_id[memory_id]
+            for memory_id in writing_output.claim_plan.secondary_proof_memory_ids
+            if memory_id in ranked_by_id
+        ][:3]
+        cover_traces = self._provider_traces(
+            writing_output.cover_letter.evidence_reference_ids,
+            trace_map,
+        )
+        primary_cover_traces = [
+            trace
+            for trace in cover_traces
+            if trace.memory_id == primary.profile.memory_id
+        ] or cover_traces
+        secondary_memory_ids = {item.profile.memory_id for item in secondary_items}
+        secondary_cover_traces = [
+            trace for trace in cover_traces if trace.memory_id in secondary_memory_ids
+        ] or primary_cover_traces
+        target_trace = self._target_context_trace(package)
+        greeting = (
+            f"Dear {package.company} Hiring Team,"
+            if package.company
+            else "Dear Hiring Team,"
+        )
+        cover_sections = writing_output.cover_letter
+        body = [cover_sections.primary_evidence]
+        if (
+            cover_sections.secondary_evidence.strip()
+            and cover_sections.secondary_evidence.strip()
+            != cover_sections.primary_evidence.strip()
+        ):
+            body.append(cover_sections.secondary_evidence)
+        full_text = "\n\n".join(
+            [
+                greeting,
+                cover_sections.opening,
+                *body,
+                cover_sections.closing,
+            ]
+        )
+        cover_letter = CoverLetterDraft(
+            subject_or_heading=f"Application for {package.role_title}",
+            greeting=greeting,
+            opening_paragraph=cover_sections.opening,
+            body_paragraphs=body,
+            closing_paragraph=cover_sections.closing,
+            full_text=full_text,
+            evidence_trace_by_paragraph=[
+                CoverLetterParagraphTrace(
+                    paragraph_label="opening",
+                    paragraph_text=cover_sections.opening,
+                    evidence_trace=[target_trace, *primary_cover_traces],
+                ),
+                *[
+                    CoverLetterParagraphTrace(
+                        paragraph_label=f"body_{index}",
+                        paragraph_text=paragraph,
+                        evidence_trace=(
+                            primary_cover_traces
+                            if index == 1
+                            else secondary_cover_traces
+                        ),
+                    )
+                    for index, paragraph in enumerate(body, start=1)
+                ],
+                CoverLetterParagraphTrace(
+                    paragraph_label="closing",
+                    paragraph_text=cover_sections.closing,
+                    evidence_trace=[target_trace],
+                ),
+            ],
+            warnings=[
+                warning.message
+                for warning in warnings
+                if warning.severity != ApplicationWarningSeverity.INFO
+            ][:5],
+            strategy_notes=writing_output.strategy_notes,
+        )
+        question_by_id = {
+            question.question_id: question
+            for question in writing_input.application_questions
+        }
+        snippets = [
+            ApplicationSnippet(
+                question_id=snippet.question_id,
+                question=question_by_id[snippet.question_id].question_text,
+                text=snippet.answer,
+                evidence_trace=self._provider_traces(
+                    snippet.evidence_reference_ids,
+                    trace_map,
+                ),
+                warnings=[],
+            )
+            for snippet in writing_output.application_snippets
+        ]
+        unsupported = self._unique(
+            [
+                *(
+                    f"Unsupported target requirement: {item.requirement}"
+                    for item in coverage.unsupported
+                ),
+                *(
+                    f"{item.claim} — {item.reason}"
+                    for item in writing_output.unsupported_claim_candidates
+                ),
+            ]
+        )
+        return ApplicationPackageOutputs(
+            positioning_summary=PositioningSummary(
+                primary_positioning=writing_output.positioning_summary,
+                strongest_evidence=self._profile_evidence_summary(primary.profile),
+                secondary_evidence=[
+                    self._profile_evidence_summary(item.profile)
+                    for item in secondary_items
+                ],
+                risks_and_gaps=self._unique(
+                    [
+                        *(warning.message for warning in warnings),
+                        *writing_output.claim_plan.missing_evidence,
+                    ]
+                ),
+                recommended_emphasis=self._unique(
+                    [
+                        *(item.requirement for item in coverage.strongly_supported),
+                        *(item.requirement for item in coverage.partially_supported),
+                    ]
+                ),
+                do_not_claim=self._unique(
+                    [
+                        *writing_output.claim_plan.claims_not_to_make,
+                        *(
+                            f"Do not claim unsupported {item.requirement}."
+                            for item in coverage.unsupported
+                        ),
+                    ]
+                ),
+            ),
+            resume_bullets=resume_groups,
+            cover_letter=cover_letter,
+            application_snippets=snippets,
+            suggested_proof_artifacts=self._proof_suggestions(session, ranked[:3]),
+            reviewer_questions=writing_output.reviewer_questions[:5],
+            unsupported_claims=unsupported,
+        )
+
+    @staticmethod
+    def _provider_traces(
+        references: list[str],
+        trace_map: dict[str, ApplicationEvidenceTrace],
+        expected_memory_id: uuid.UUID | None = None,
+    ) -> list[ApplicationEvidenceTrace]:
+        traces: list[ApplicationEvidenceTrace] = []
+        for reference in references:
+            trace = trace_map.get(reference)
+            if trace is None or (
+                expected_memory_id is not None and trace.memory_id != expected_memory_id
+            ):
+                ApplicationPackageService._raise_invalid_provider_draft(
+                    "The writer returned an invalid evidence reference."
+                )
+            assert trace is not None
+            if trace.trace_id not in {item.trace_id for item in traces}:
+                traces.append(trace)
+        if not traces:
+            ApplicationPackageService._raise_invalid_provider_draft(
+                "Every factual writing surface must reference selected evidence."
+            )
+        return traces
+
+    @staticmethod
+    def _raise_invalid_provider_draft(message: str) -> None:
+        raise ApplicationWritingMalformedOutputError(
+            ApplicationWritingErrorCode.MALFORMED_OUTPUT,
+            message,
+        )
+
+    def _validate_generated_outputs(
+        self,
+        outputs: ApplicationPackageOutputs,
+        writing_output: ApplicationWritingOutput,
+        writing_input: ApplicationWritingInput,
+        profile_snapshots: list[dict[str, Any]],
+        target_snapshot: dict[str, Any],
+        warnings: list[ApplicationPackageWarning],
+    ) -> None:
+        validate_application_writing_output_contract(writing_input, writing_output)
+        allowed_refs = {
+            reference
+            for memory in writing_input.selected_memories
+            for reference in memory.evidence_reference_ids
+        }
+        selected_ids = {memory.memory_id for memory in writing_input.selected_memories}
+        used_refs = {
+            item.evidence_reference_id
+            for item in writing_output.evidence_references_used
+        }
+        surface_refs = (
+            {
+                reference
+                for group in writing_output.resume_bullet_groups
+                for bullet in group.bullets
+                for reference in bullet.evidence_reference_ids
+            }
+            | set(writing_output.cover_letter.evidence_reference_ids)
+            | {
+                reference
+                for snippet in writing_output.application_snippets
+                for reference in snippet.evidence_reference_ids
+            }
+        )
+        evidence_memory = {
+            item.evidence_reference_id: item.memory_id
+            for item in writing_output.evidence_references_used
+        }
+        reference_owner = {
+            reference: memory.memory_id
+            for memory in writing_input.selected_memories
+            for reference in memory.evidence_reference_ids
+        }
+        if (
+            not used_refs
+            or not surface_refs
+            or not (used_refs | surface_refs).issubset(allowed_refs)
+            or any(
+                reference_owner.get(reference) != memory_id
+                for reference, memory_id in evidence_memory.items()
+            )
+            or writing_output.claim_plan.primary_proof_memory_id not in selected_ids
+            or not set(writing_output.claim_plan.secondary_proof_memory_ids).issubset(
+                selected_ids
+            )
+        ):
+            self._raise_invalid_provider_draft(
+                "The writer returned evidence or memory references outside the "
+                "selected proof."
+            )
+        if writing_output.unsupported_claim_candidates:
+            self._raise_invalid_provider_draft(
+                "The writer reported an unresolved unsupported claim; no version "
+                "was saved."
+            )
+        if self._contains_mechanical_phrase(
+            " ".join(
+                [
+                    outputs.positioning_summary.primary_positioning,
+                    outputs.positioning_summary.strongest_evidence,
+                    *outputs.positioning_summary.secondary_evidence,
+                    outputs.cover_letter.full_text,
+                    *(
+                        bullet.bullet_text
+                        for group in outputs.resume_bullets
+                        for bullet in group.bullets
+                    ),
+                    *(snippet.text for snippet in outputs.application_snippets),
+                ]
+            )
+        ):
+            self._raise_invalid_provider_draft(
+                "The writer returned mechanical source-field language; no version "
+                "was saved."
+            )
+
+        ledger = self._claim_ledger(outputs)
+        claim_ids = {item.claim_id for item in ledger}
+        claims = self._edited_claims(
+            outputs,
+            claim_ids,
+            [uuid.UUID(item) for item in selected_ids],
+        )
+        audited_claims = [
+            _EditedClaim(
+                claim_id=claim.claim_id,
+                surface=claim.surface,
+                text=self._mask_generated_target_labels(
+                    claim.text,
+                    target_snapshot,
+                ),
+                memory_ids=claim.memory_ids,
+            )
+            for claim in claims
+        ]
+        unsupported_numbers = self._unsupported_numbers_for_claims(
+            audited_claims,
+            profile_snapshots,
+            target_snapshot,
+        )
+        unsupported_terms = self._unsupported_terms_for_claims(
+            audited_claims,
+            profile_snapshots,
+            [warning.requirement for warning in warnings if warning.requirement],
+        )
+        cross_memory = self._cross_memory_terms_for_claims(
+            audited_claims,
+            profile_snapshots,
+        )
+        unsupported_outcomes = self._unsupported_outcomes_for_claims(
+            audited_claims,
+            profile_snapshots,
+        )
+        strategy_signal_leakage = self._strategy_signal_leakage_for_claims(
+            audited_claims,
+            profile_snapshots,
+            writing_input,
+        )
+        if (
+            unsupported_numbers
+            or unsupported_terms
+            or cross_memory
+            or unsupported_outcomes
+            or strategy_signal_leakage
+        ):
+            self._raise_invalid_provider_draft(
+                "The generated draft introduced an unsupported claim and was not saved."
+            )
+
+    @staticmethod
+    def _mask_generated_target_labels(
+        value: str,
+        target_snapshot: dict[str, Any],
+    ) -> str:
+        masked = value
+        for field in ("role_title", "company"):
+            label = str(target_snapshot.get(field) or "").strip()
+            if label:
+                masked = re.sub(re.escape(label), "target role", masked, flags=re.I)
+        return masked
+
+    def _writing_intelligence(
+        self,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+        coverage: RequirementCoverage,
+        writing_output: ApplicationWritingOutput,
+        outputs: ApplicationPackageOutputs,
+    ) -> ApplicationWritingIntelligence:
+        job = writing_output.job_understanding
+        plan = writing_output.claim_plan
+        primary = next(
+            (
+                item
+                for item in ranked
+                if str(item.profile.memory_id) == plan.primary_proof_memory_id
+            ),
+            ranked[0],
+        )
+        secondary = [
+            item
+            for item in ranked
+            if str(item.profile.memory_id) in plan.secondary_proof_memory_ids
+        ]
+        return ApplicationWritingIntelligence(
+            job_understanding=ApplicationJobUnderstanding(
+                role_family=job.role_family,
+                seniority=job.seniority,
+                central_objective=job.central_objective,
+                core_responsibilities=job.core_responsibilities,
+                must_have_requirements=job.must_have_requirements,
+                preferred_requirements=job.preferred_requirements,
+                technical_expectations=job.technical_expectations,
+                communication_expectations=job.communication_expectations,
+                concrete_tools_requiring_direct_proof=(
+                    job.concrete_tools_requiring_direct_proof
+                ),
+                generic_concepts=job.broad_semantic_concepts,
+            ),
+            requirement_coverage=coverage,
+            claim_plan=ApplicationClaimPlan(
+                primary_positioning=plan.primary_positioning,
+                primary_proof=self._profile_evidence_summary(primary.profile),
+                secondary_proof=[
+                    self._profile_evidence_summary(item.profile) for item in secondary
+                ],
+                supported_requirements=[
+                    item.requirement for item in coverage.strongly_supported
+                ],
+                partially_supported_requirements=[
+                    item.requirement for item in coverage.partially_supported
+                ],
+                unsupported_requirements=[
+                    item.requirement for item in coverage.unsupported
+                ],
+                claims_not_to_make=plan.claims_not_to_make,
+                missing_evidence=plan.missing_evidence,
+                resume_strategy=plan.resume_strategy,
+                cover_letter_narrative_strategy=plan.cover_letter_strategy,
+                snippet_strategy=plan.snippet_strategy,
+                tone=plan.tone,
+            ),
+            strategy_notes=self._unique(
+                [
+                    *writing_output.strategy_notes,
+                    f"Selected {len(ranked)} of the strongest compiled memories for "
+                    f"{package.role_title}.",
+                    outputs.positioning_summary.primary_positioning,
+                ]
+            )[:10],
+        )
+
     def _compose_outputs(
         self,
         session: Session,
@@ -901,6 +2820,7 @@ class ApplicationPackageService:
         ranked: list[_RankedProfile],
         warnings: list[ApplicationPackageWarning],
         unsupported_requirements: list[str],
+        application_questions: list[ApplicationQuestionInput],
     ) -> ApplicationPackageOutputs:
         resume_bullets: list[ResumeBulletGroup] = []
         for item in ranked[:4]:
@@ -914,7 +2834,12 @@ class ApplicationPackageService:
             warnings,
             unsupported_requirements,
         )
-        snippets = self._snippets(package, ranked, warnings)
+        snippets = self._snippets(
+            package,
+            ranked,
+            warnings,
+            application_questions,
+        )
         suggestions = self._proof_suggestions(session, ranked[:3])
         reviewer_questions = self._reviewer_questions(
             package,
@@ -947,21 +2872,21 @@ class ApplicationPackageService:
     def _resume_group(self, ranked: _RankedProfile) -> ResumeBulletGroup:
         profile = ranked.profile
         trace = self._claim_trace_for_profile(profile)
-        bullet_texts = list(profile.resume_bullet_claims[:2])
+        bullet_texts = self._derived_resume_bullets(profile)
         if len(bullet_texts) < 2:
-            derived = self._derived_resume_bullets(profile)
-            bullet_texts = self._unique([*bullet_texts, *derived])[:2]
-        no_metric = not self._has_quantified_result(profile)
+            safe_compiled = [
+                claim
+                for claim in profile.resume_bullet_claims
+                if 12 <= len(claim.split()) <= 38
+                and not self._contains_mechanical_phrase(claim)
+            ]
+            bullet_texts = self._unique([*bullet_texts, *safe_compiled])[:2]
         bullets = [
             ResumeBullet(
                 bullet_text=self._sentence(text),
                 evidence_trace=trace,
                 confidence=profile.confidence,
-                warnings=(
-                    ["No quantified outcome is currently supported for this claim."]
-                    if no_metric
-                    else []
-                ),
+                warnings=[],
                 why_this_bullet=ranked.target_reason,
             )
             for text in bullet_texts
@@ -980,24 +2905,49 @@ class ApplicationPackageService:
         profile: CompiledCareerMemoryProfile,
     ) -> list[str]:
         bullets: list[str] = []
-        if profile.workflow_steps:
-            result = (
-                "; " + self._lower_first(profile.findings_or_results[0])
-                if profile.findings_or_results
-                else ""
-            )
-            bullets.append(self._join_action_steps(profile.workflow_steps[:4]) + result)
-        if profile.methods and profile.data_or_inputs:
+        problem = self._compact_phrase(
+            self._problem_phrase(profile.research_question_or_problem), 7
+        )
+        method = self._join(
+            [self._compact_phrase(value, 3) for value in profile.methods[:2]]
+        )
+        data = (
+            self._compact_phrase(profile.data_or_inputs[0], 5)
+            if profile.data_or_inputs
+            else ""
+        )
+        if method and data and problem:
             bullets.append(
-                "Applied "
-                + self._join(profile.methods[:4])
-                + " to "
-                + self._join(profile.data_or_inputs[:3])
+                f"Analyzed {data} with {method} to investigate {problem} and keep "
+                "the final interpretation grounded in evidence"
             )
-        if profile.research_question_or_problem and (
-            profile.methods or profile.workflow_steps
-        ):
-            bullets.append("Investigated " + profile.research_question_or_problem)
+        elif method and problem:
+            bullets.append(
+                f"Applied {method} to investigate {problem}, documenting the "
+                "analytical choices that shaped the final interpretation"
+            )
+        elif profile.workflow_steps and problem:
+            step = self._compact_phrase(profile.workflow_steps[0], 9)
+            bullets.append(
+                f"Built a project workflow around {step} to investigate {problem} "
+                "and preserve a clear connection between analysis and conclusion"
+            )
+
+        if profile.workflow_steps:
+            checks = self._join(
+                [self._compact_phrase(value, 4) for value in profile.workflow_steps[:2]]
+            )
+            if profile.findings_or_results:
+                result = self._compact_phrase(profile.findings_or_results[0], 7)
+                bullets.append(
+                    f"Validated the analysis through {checks}, then reported that "
+                    f"{self._lower_first(result)} without overstating the result"
+                )
+            else:
+                bullets.append(
+                    f"Validated the project workflow through {checks}, preserving "
+                    "quality checks and limitations for a careful final interpretation"
+                )
         return bullets
 
     def _cover_letter(
@@ -1008,47 +2958,49 @@ class ApplicationPackageService:
     ) -> CoverLetterDraft:
         primary = ranked[0]
         company_phrase = f" at {package.company}" if package.company else ""
-        focus = self._target_focus(package, primary.profile)
         supported = self._supported_summary(primary.profile)
         if self._has_substantive_profile(primary.profile):
             opening = (
                 f"I am applying for the {package.role_title} role{company_phrase}. "
-                f"The role's focus on {focus} connects directly to my approved work "
-                f"on {primary.profile.canonical_title}, where I developed documented "
-                f"experience with {supported}."
+                f"My strongest projects have required {supported}, along with the "
+                "discipline to test assumptions "
+                "and explain what the evidence does and does not show. That "
+                "combination would let me contribute thoughtfully while continuing "
+                "to grow in the role."
             )
         else:
             opening = (
                 f"I am applying for the {package.role_title} role{company_phrase}. "
-                f"The approved record for {primary.profile.canonical_title} currently "
-                "provides limited project context, so this draft does not treat it as "
-                "proof of a stronger role-specific capability."
+                f"The current record for {primary.profile.canonical_title} is too "
+                "limited to support stronger method or result claims."
             )
         body_profiles = ranked[:2]
         body = [self._profile_narrative(item.profile) for item in body_profiles]
-        if len(body) == 1 and primary.profile.workflow_steps:
-            workflow = self._lower_first(
-                self._join_action_steps(primary.profile.workflow_steps[:4])
+        if len(body) == 1 and self._has_substantive_profile(primary.profile):
+            skills = self._join(
+                self._unique(
+                    [
+                        *primary.profile.skills_demonstrated[:2],
+                        *primary.profile.methods[:1],
+                    ]
+                )
             )
-            finding = (
-                " I kept the documented result modest: "
-                + self._lower_first(primary.profile.findings_or_results[0])
-                if primary.profile.findings_or_results
-                else ""
+            body.append(
+                "This work is relevant beyond its subject matter because it required "
+                f"me to practice {skills or 'careful analysis and evidence review'}. "
+                "I would bring the same measured approach "
+                f"to the day-to-day responsibilities of the {package.role_title} role."
             )
-            body.append(f"I {workflow}.{finding}".strip())
+        elif len(body) == 1:
+            body.append("The current project record is sparse.")
         if self._has_substantive_profile(primary.profile):
             closing = (
-                "I would welcome the opportunity to discuss how this documented "
-                f"experience could support the responsibilities described for the "
-                f"{package.role_title} role. Thank you for your consideration."
+                "I would welcome the opportunity to discuss how a careful, "
+                f"evidence-aware approach could support the {package.role_title} "
+                "team. Thank you for your time and consideration."
             )
         else:
-            closing = (
-                "Thank you for considering my application. I would welcome a "
-                "conversation while keeping any stronger capability claims out until "
-                "they are supported by reviewed evidence."
-            )
+            closing = "Thank you for considering my application."
         greeting = (
             f"Dear {package.company} Hiring Team,"
             if package.company
@@ -1112,32 +3064,42 @@ class ApplicationPackageService:
         sentences: list[str] = []
         if profile.research_question_or_problem:
             sentences.append(
-                f"My work on {profile.canonical_title} focused on "
+                f"In my {profile.canonical_title}, I investigated "
                 f"{self._problem_phrase(profile.research_question_or_problem)}"
             )
         else:
             sentences.append(
-                f"My approved work on {profile.canonical_title} provides a concrete "
-                "project example"
+                f"My {profile.canonical_title} gave me a concrete project through "
+                "which to practice careful analysis"
             )
         if profile.methods:
-            method = self._join(profile.methods[:4])
+            method = self._join(profile.methods[:2])
             if profile.data_or_inputs:
                 sentences.append(
-                    f"I used {method} with {self._join(profile.data_or_inputs[:3])}"
+                    f"I built the workflow around {method} using "
+                    f"{self._join(profile.data_or_inputs[:2])}, selecting only the "
+                    "steps needed to answer the central question"
                 )
             else:
-                sentences.append(f"I used {method}")
+                sentences.append(
+                    f"I used {method} as the core of a focused analytical workflow"
+                )
         if profile.findings_or_results:
             sentences.append(
-                "The documented result was "
+                "The analysis showed that "
                 + self._lower_first(profile.findings_or_results[0])
             )
         if profile.limitations:
             sentences.append(
-                "I kept "
-                + self._join(profile.limitations[:2])
-                + " visible as limitations rather than overstating the conclusion"
+                "I treated "
+                + self._join(profile.limitations[:1])
+                + " as a constraint on the conclusion and communicated it directly"
+            )
+        elif profile.skills_demonstrated:
+            sentences.append(
+                "The project strengthened my ability to "
+                + self._lower_first(self._join(profile.skills_demonstrated[:2]))
+                + " while keeping the final explanation accessible"
             )
         return " ".join(self._sentence(item) for item in sentences)
 
@@ -1157,7 +3119,7 @@ class ApplicationPackageService:
             )
         else:
             primary_positioning = (
-                f"Use {primary.profile.canonical_title} only as limited approved "
+                f"Use {primary.profile.canonical_title} only as limited project "
                 "context; the current record does not support a strong role-specific "
                 "capability claim."
             )
@@ -1205,7 +3167,11 @@ class ApplicationPackageService:
         package: ApplicationPackage,
         ranked: list[_RankedProfile],
         warnings: list[ApplicationPackageWarning],
+        application_questions: list[ApplicationQuestionInput],
     ) -> list[ApplicationSnippet]:
+        if not application_questions:
+            return []
+
         primary = ranked[0]
         profile = primary.profile
         trace = self._claim_trace_for_profile(profile)
@@ -1214,134 +3180,101 @@ class ApplicationPackageService:
         fit_text = (
             bullet[0].bullet_text if bullet else self._profile_evidence_summary(profile)
         )
-        if profile.limitations:
-            challenge = (
-                f"One challenge in {profile.canonical_title} was accounting for "
-                f"{self._join(profile.limitations[:2])}. I kept that limitation "
-                "visible in the interpretation instead of overstating the result."
-            )
-        elif profile.workflow_steps or profile.methods:
-            workflow = self._lower_first(
-                self._join_action_steps((profile.workflow_steps or profile.methods)[:3])
-            )
-            challenge = (
-                f"In {profile.canonical_title}, I {workflow}. "
-                "Those documented steps describe how I approached the review process."
-            )
-        else:
-            challenge = (
-                f"The approved record for {profile.canonical_title} is still sparse. "
-                "Before making a stronger challenge claim, I would add reviewed "
-                "evidence about the methods used and the result."
-            )
         technical = self._supported_summary(profile)
-        has_technical_detail = bool(
-            profile.skills_demonstrated or profile.methods or profile.tools
-        )
         common_warnings = [
             item.message
             for item in warnings
             if item.severity != ApplicationWarningSeverity.INFO
         ][:2]
-        if not has_technical_detail:
-            return [
+        snippets: list[ApplicationSnippet] = []
+        for question in application_questions:
+            if not question.required:
+                continue
+            lowered = f"{question.question_id} {question.question_text}".casefold()
+            if self._is_motivation_question(question):
+                answer = (
+                    f"I am interested in the {package.role_title} role. A relevant "
+                    f"example is {profile.canonical_title}, where I practiced "
+                    f"{technical}."
+                )
+                answer_trace = [target_trace, *trace]
+            elif any(
+                token in lowered
+                for token in ("quality", "reliab", "validat", "accur", "check")
+            ):
+                answer = self._quality_reliability_answer(profile)
+                answer_trace = trace
+            elif any(
+                token in lowered
+                for token in ("project", "complex", "analy", "data", "example")
+            ):
+                answer = self._profile_narrative(profile)
+                answer_trace = trace
+            elif any(token in lowered for token in ("technical", "skill", "tool")):
+                answer = (
+                    f"I developed {technical} through {profile.canonical_title}."
+                )
+                answer_trace = trace
+            else:
+                answer = (
+                    f"In {profile.canonical_title}, {self._lower_first(fit_text)}"
+                )
+                answer_trace = trace
+            snippets.append(
                 ApplicationSnippet(
-                    question="Why are you interested in this role?",
-                    text=(
-                        f"I am interested in the {package.role_title} role. The "
-                        f"approved record for {profile.canonical_title} is currently "
-                        "too limited to present as proof of the requested skills."
+                    question_id=question.question_id,
+                    question=question.question_text,
+                    text=self._fit_application_answer_length(
+                        answer,
+                        question.maximum_length,
                     ),
-                    evidence_trace=[target_trace, *trace],
+                    evidence_trace=answer_trace,
                     warnings=common_warnings,
-                ),
-                ApplicationSnippet(
-                    question="Why are you a good fit?",
-                    text=(
-                        f"The approved record for {profile.canonical_title} provides "
-                        "project context, but I would add reviewed evidence before "
-                        "making a stronger fit claim."
-                    ),
-                    evidence_trace=trace,
-                    warnings=common_warnings,
-                ),
-                ApplicationSnippet(
-                    question="Describe a relevant project.",
-                    text=(
-                        f"The approved record for {profile.canonical_title} is sparse. "
-                        "It does not yet document enough method or result detail for a "
-                        "stronger project claim."
-                    ),
-                    evidence_trace=trace,
-                    warnings=common_warnings,
-                ),
-                ApplicationSnippet(
-                    question="Tell us about a challenge.",
-                    text=challenge,
-                    evidence_trace=trace,
-                    warnings=common_warnings,
-                ),
-                ApplicationSnippet(
-                    question="What technical skills would you bring?",
-                    text=(
-                        f"My approved record currently supports the project context "
-                        f"for {profile.canonical_title}, but not a stronger "
-                        "tool-specific technical claim yet."
-                    ),
-                    evidence_trace=trace,
-                    warnings=common_warnings,
-                ),
-            ]
-        return [
-            ApplicationSnippet(
-                question="Why are you interested in this role?",
-                text=(
-                    f"I am interested in the {package.role_title} role because its "
-                    f"focus on {self._target_focus(package, profile)} aligns with "
-                    "the kind of "
-                    f"work I practiced in {profile.canonical_title}: {technical}."
-                ),
-                evidence_trace=[target_trace, *trace],
-                warnings=common_warnings,
-            ),
-            ApplicationSnippet(
-                question="Why are you a good fit?",
-                text=(
-                    f"I would bring documented experience from "
-                    f"{profile.canonical_title}. {fit_text}"
-                ),
-                evidence_trace=trace,
-                warnings=common_warnings,
-            ),
-            ApplicationSnippet(
-                question="Describe a relevant project.",
-                text=self._profile_narrative(profile),
-                evidence_trace=trace,
-                warnings=common_warnings,
-            ),
-            ApplicationSnippet(
-                question="Tell us about a challenge.",
-                text=challenge,
-                evidence_trace=trace,
-                warnings=common_warnings,
-            ),
-            ApplicationSnippet(
-                question="What technical skills would you bring?",
-                text=(
-                    "The strongest technical areas supported by my approved project "
-                    f"evidence are {technical}, demonstrated through "
-                    f"{profile.canonical_title}."
-                    if has_technical_detail
-                    else (
-                        f"My approved record currently supports the project context "
-                        f"for {profile.canonical_title}, but not a stronger "
-                        "tool-specific technical claim yet."
-                    )
-                ),
-                evidence_trace=trace,
-                warnings=common_warnings,
-            ),
-        ]
+                )
+            )
+        return snippets
+
+    @staticmethod
+    def _is_motivation_question(question: ApplicationQuestionInput) -> bool:
+        rendered = f"{question.question_id} {question.question_text}".casefold()
+        return any(
+            token in rendered
+            for token in ("motivation", "interested", "interest", "why this role")
+        )
+
+    def _quality_reliability_answer(
+        self,
+        profile: CompiledCareerMemoryProfile,
+    ) -> str:
+        if profile.limitations:
+            return (
+                f"In {profile.canonical_title}, I accounted for "
+                f"{self._join(profile.limitations[:2])} and kept that limitation "
+                "visible in the interpretation."
+            )
+        if profile.workflow_steps or profile.methods:
+            workflow = self._lower_first(
+                self._join_action_steps((profile.workflow_steps or profile.methods)[:3])
+            )
+            return f"In {profile.canonical_title}, I {workflow}."
+        return self._profile_evidence_summary(profile)
+
+    @staticmethod
+    def _fit_application_answer_length(text: str, maximum_length: int | None) -> str:
+        rendered = " ".join(text.split()).strip()
+        if maximum_length is None or len(rendered) <= maximum_length:
+            return rendered
+        complete_sentences = re.findall(r"[^.!?]+[.!?]", rendered)
+        retained = ""
+        for sentence in complete_sentences:
+            candidate = f"{retained} {sentence.strip()}".strip()
+            if len(candidate) > maximum_length:
+                break
+            retained = candidate
+        if retained:
+            return retained
+        shortened = rendered[: maximum_length - 1].rsplit(" ", 1)[0].rstrip(".,;: ")
+        return f"{shortened}." if shortened else rendered[:maximum_length]
 
     def _proof_suggestions(
         self,
@@ -1369,7 +3302,7 @@ class ApplicationPackageService:
                         action="ATTACH",
                         reason=(
                             "Attach this ready proof artifact because it documents the "
-                            "approved memory used in the package."
+                            "selected project evidence used in the package."
                         ),
                     )
                 )
@@ -1406,8 +3339,8 @@ class ApplicationPackageService:
                         artifact_title=f"{item.profile.canonical_title} proof artifact",
                         action="BUILD",
                         reason=(
-                            "Build a short case study from this approved memory for an "
-                            "optional portfolio or application upload."
+                            "Build a short case study from this selected project for "
+                            "an optional portfolio or application upload."
                         ),
                     )
                 )
@@ -1434,7 +3367,7 @@ class ApplicationPackageService:
                 )
             elif item.profile.missing_or_weak_sections:
                 questions.append(
-                    f"Can you add approved evidence for "
+                    f"Can you add supporting evidence for "
                     f"{item.profile.missing_or_weak_sections[0].lower()} in "
                     f"{item.profile.canonical_title}?"
                 )
@@ -1450,31 +3383,24 @@ class ApplicationPackageService:
         package: ApplicationPackage,
         ranked: list[_RankedProfile],
     ) -> tuple[list[ApplicationPackageWarning], list[str]]:
-        factual_text = " ".join(
-            self._profile_capability_text(item.profile) for item in ranked
-        )
-        requirements = self._requested_requirements(package)
-        unsupported = [
-            label
-            for label, support_patterns in requirements
-            if not self._patterns_supported(factual_text, support_patterns)
-        ]
+        coverage = self._requirement_coverage(package, ranked)
+        unsupported = [item.requirement for item in coverage.unsupported]
         warnings: list[ApplicationPackageWarning] = []
         for requirement in unsupported:
             if requirement == "production ML deployment":
                 message = (
-                    "The job asks for production ML deployment, but no approved "
-                    "memory currently supports deployment."
+                    "The job asks for production ML deployment, but the selected "
+                    "proof does not currently support deployment."
                 )
             elif requirement in {"AWS", "Azure", "GCP", "cloud infrastructure"}:
                 message = (
-                    f"The job asks for {requirement}, but no approved memory currently "
-                    "supports that cloud experience."
+                    f"The job asks for {requirement}, but the selected proof does not "
+                    "currently support that cloud experience."
                 )
             else:
                 message = (
-                    f"The target asks for {requirement}, but the selected approved "
-                    "memory does not currently support that claim."
+                    f"The target asks for {requirement}, but the selected proof does "
+                    "not currently support that claim."
                 )
             warnings.append(
                 ApplicationPackageWarning(
@@ -1491,7 +3417,7 @@ class ApplicationPackageService:
                     ApplicationPackageWarning(
                         code="SPARSE_APPROVED_MEMORY",
                         message=(
-                            f"{item.profile.canonical_title} has limited approved "
+                            f"{item.profile.canonical_title} has limited supporting "
                             "method, skill, and result detail. Stronger capability "
                             "claims stay out of this draft."
                         ),
@@ -1534,6 +3460,110 @@ class ApplicationPackageService:
                 )
         return self._dedupe_warnings(warnings), self._unique(unsupported)
 
+    def _requirement_coverage(
+        self,
+        package: ApplicationPackage,
+        ranked: list[_RankedProfile],
+    ) -> RequirementCoverage:
+        requirements = self._requested_requirements(package)
+        explicit = {
+            item.casefold()
+            for item in [*package.required_skills, *package.preferred_skills]
+        }
+        direct_proof = {
+            "python",
+            "sql",
+            "r",
+            "java",
+            "aws",
+            "azure",
+            "gcp",
+            "docker",
+            "kubernetes",
+            "cloud infrastructure",
+            "deployment",
+            "production ml deployment",
+            "llms",
+            "rag",
+            "agents",
+            "tableau",
+            "power bi",
+            "excel",
+        }
+        partial_patterns: dict[str, tuple[str, ...]] = {
+            "data analysis": ("analysis", "analytical", "research", "statistics"),
+            "modeling": ("fit", "uncertainty", "validation", "statistical"),
+            "statistics": ("analysis", "measurement", "uncertainty"),
+            "technical communication": (
+                "documentation",
+                "report",
+                "presentation",
+                "explain",
+                "communicat",
+            ),
+            "data quality": ("inspection", "review", "validation", "categor"),
+            "research problem solving": (
+                "research",
+                "hypothesis",
+                "debug",
+                "uncertainty",
+                "experiment",
+            ),
+        }
+        strongly: list[RequirementCoverageItem] = []
+        partially: list[RequirementCoverageItem] = []
+        unsupported: list[RequirementCoverageItem] = []
+        not_relevant: list[RequirementCoverageItem] = []
+        for label, patterns in requirements:
+            supporting = [
+                item
+                for item in ranked
+                if self._patterns_supported(
+                    self._profile_capability_text(item.profile), patterns
+                )
+            ]
+            if supporting:
+                strongly.append(
+                    RequirementCoverageItem(
+                        requirement=label,
+                        evidence=[
+                            f"{item.profile.canonical_title}: "
+                            f"{self._supported_summary(item.profile)}"
+                            for item in supporting[:3]
+                        ],
+                        memory_ids=[item.profile.memory_id for item in supporting[:3]],
+                    )
+                )
+                continue
+            related = [
+                item
+                for item in ranked
+                if any(
+                    token in self._profile_relevance_text(item.profile).casefold()
+                    for token in partial_patterns.get(label.casefold(), ())
+                )
+            ]
+            coverage_item = RequirementCoverageItem(
+                requirement=label,
+                evidence=[
+                    f"{item.profile.canonical_title}: related but indirect proof"
+                    for item in related[:2]
+                ],
+                memory_ids=[item.profile.memory_id for item in related[:2]],
+            )
+            if related and label.casefold() not in direct_proof:
+                partially.append(coverage_item)
+            elif label.casefold() in explicit or label.casefold() in direct_proof:
+                unsupported.append(coverage_item)
+            else:
+                not_relevant.append(coverage_item)
+        return RequirementCoverage(
+            strongly_supported=strongly,
+            partially_supported=partially,
+            unsupported=unsupported,
+            not_relevant_enough=not_relevant,
+        )
+
     def _requested_requirements(
         self,
         package: ApplicationPackage,
@@ -1552,6 +3582,11 @@ class ApplicationPackageService:
             if any(
                 re.search(pattern, description, re.I) for pattern in target_patterns
             ):
+                if label == "deployment" and any(
+                    existing_label == "production ML deployment"
+                    for existing_label, _ in found
+                ):
+                    continue
                 found.append((label, support_patterns))
         for value in explicit:
             if any(value.casefold() == label.casefold() for label, _ in found):
@@ -1583,7 +3618,7 @@ class ApplicationPackageService:
     ) -> list[ApplicationEvidenceTrace]:
         entries: list[ApplicationEvidenceTrace] = []
         enrichment_ids = {str(item) for item in profile.enrichment_ids_used}
-        for index, evidence in enumerate(profile.evidence_used):
+        for evidence in profile.evidence_used:
             is_enrichment = evidence.kind == CompiledEvidenceKind.APPROVED_ENRICHMENT
             enrichment_id = (
                 uuid.UUID(evidence.evidence_id)
@@ -1607,7 +3642,12 @@ class ApplicationPackageService:
             )
             entries.append(
                 ApplicationEvidenceTrace(
-                    trace_id=f"{profile.memory_id}-proof-{index}-{evidence.evidence_id}",
+                    trace_id=self._stable_contract_id(
+                        "trace",
+                        str(profile.memory_id),
+                        evidence.kind.value,
+                        evidence.evidence_id,
+                    ),
                     source_type=source_type,
                     support_type=EvidenceSupportType.DIRECT,
                     source_label=label,
@@ -1697,8 +3737,12 @@ class ApplicationPackageService:
         outputs: ApplicationPackageOutputs,
         *,
         edited_claim_ids: set[str] | None = None,
+        candidate_claims: list[CandidateFacingClaim] | None = None,
     ) -> list[ApplicationClaimLedgerEntry]:
         edited_claim_ids = edited_claim_ids or set()
+        provider_claims = {
+            claim.field_path: claim for claim in (candidate_claims or [])
+        }
         entries: list[ApplicationClaimLedgerEntry] = []
         positioning_traces = [
             trace
@@ -1721,6 +3765,7 @@ class ApplicationPackageService:
                 positioning_traces,
                 outputs.positioning_summary.risks_and_gaps,
                 user_edited="positioning-summary" in edited_claim_ids,
+                candidate_claim=provider_claims.get("positioning_summary"),
             )
         )
         entries.append(
@@ -1735,6 +3780,10 @@ class ApplicationPackageService:
         )
         for group_index, group in enumerate(outputs.resume_bullets, start=1):
             for bullet_index, bullet in enumerate(group.bullets, start=1):
+                field_path = (
+                    f"resume_bullet_groups.{group_index - 1}.bullets."
+                    f"{bullet_index - 1}.text"
+                )
                 entries.append(
                     self._ledger_entry(
                         f"resume-{group_index}-{bullet_index}",
@@ -1745,6 +3794,7 @@ class ApplicationPackageService:
                         user_edited=(
                             f"resume-{group_index}-{bullet_index}" in edited_claim_ids
                         ),
+                        candidate_claim=provider_claims.get(field_path),
                     )
                 )
         cover_traces = [
@@ -1766,6 +3816,12 @@ class ApplicationPackageService:
             outputs.cover_letter.evidence_trace_by_paragraph,
             start=1,
         ):
+            cover_field_path = {
+                "opening": "cover_letter.opening",
+                "body_1": "cover_letter.primary_evidence",
+                "body_2": "cover_letter.secondary_evidence",
+                "closing": "cover_letter.closing",
+            }.get(paragraph.paragraph_label)
             entries.append(
                 self._ledger_entry(
                     f"cover-letter-{index}",
@@ -1774,17 +3830,26 @@ class ApplicationPackageService:
                     paragraph.evidence_trace,
                     outputs.cover_letter.warnings,
                     user_edited=(f"cover-letter-{index}" in edited_claim_ids),
+                    candidate_claim=(
+                        provider_claims.get(cover_field_path)
+                        if cover_field_path is not None
+                        else None
+                    ),
                 )
             )
         for index, snippet in enumerate(outputs.application_snippets, start=1):
+            claim_id = f"snippet-{snippet.question_id or index}"
             entries.append(
                 self._ledger_entry(
-                    f"snippet-{index}",
+                    claim_id,
                     "snippet",
                     snippet.text,
                     snippet.evidence_trace,
                     snippet.warnings,
-                    user_edited=f"snippet-{index}" in edited_claim_ids,
+                    user_edited=claim_id in edited_claim_ids,
+                    candidate_claim=provider_claims.get(
+                        f"application_snippets.{index - 1}.answer"
+                    ),
                 )
             )
         return entries
@@ -1798,6 +3863,7 @@ class ApplicationPackageService:
         warnings: list[str],
         *,
         user_edited: bool = False,
+        candidate_claim: CandidateFacingClaim | None = None,
     ) -> ApplicationClaimLedgerEntry:
         factual = [
             item for item in traces if item.support_type == EvidenceSupportType.DIRECT
@@ -1851,6 +3917,26 @@ class ApplicationPackageService:
             strategy_signal_caveat=(
                 "Strategy signal, not proof of causality." if strategy_ids else None
             ),
+            evidence_atom_ids=(
+                candidate_claim.evidence_atom_ids if candidate_claim is not None else []
+            ),
+            claim_type=(
+                candidate_claim.claim_type.value
+                if candidate_claim is not None
+                else None
+            ),
+            tools_claimed=(
+                candidate_claim.tools_claimed if candidate_claim is not None else []
+            ),
+            outcome_claimed=(
+                candidate_claim.outcome_claimed.model_dump(mode="json")
+                if candidate_claim is not None
+                and candidate_claim.outcome_claimed is not None
+                else None
+            ),
+            certainty=(
+                candidate_claim.certainty.value if candidate_claim is not None else None
+            ),
         )
 
     def _rank_profile(
@@ -1862,8 +3948,40 @@ class ApplicationPackageService:
         factual = self._profile_relevance_text(profile)
         factual_terms = self._terms(factual)
         overlap = len(target_terms & factual_terms) / max(len(target_terms), 1)
+        target_rules = [
+            support_patterns
+            for _, target_patterns, support_patterns in self._requirement_rules
+            if any(re.search(pattern, target_text, re.I) for pattern in target_patterns)
+        ]
+        semantic_overlap = (
+            sum(
+                self._patterns_supported(factual, support_patterns)
+                for support_patterns in target_rules
+            )
+            / len(target_rules)
+            if target_rules
+            else 0.0
+        )
+        specificity = min(
+            (
+                len(profile.methods)
+                + len(profile.tools)
+                + len(profile.workflow_steps)
+                + len(profile.findings_or_results)
+                + len(profile.proof_claims)
+            )
+            / 12,
+            1.0,
+        )
+        evidence_breadth = min(len(profile.evidence_used) / 4, 1.0)
         target_lower = target_text.casefold()
         bonus = 0.0
+        title_match_bonus = (
+            0.35
+            if profile.canonical_title.casefold() in target_lower
+            and len(profile.canonical_title.strip()) >= 8
+            else 0.0
+        )
         shortcut_supported = self._has_project_shortcut_evidence(profile)
         if (
             shortcut_supported
@@ -1880,7 +3998,7 @@ class ApplicationPackageService:
                 )
             )
         ):
-            bonus = 0.35
+            bonus = 0.2
         elif (
             shortcut_supported
             and profile.project_kind == "UNICORN"
@@ -1895,22 +4013,34 @@ class ApplicationPackageService:
                 )
             )
         ):
-            bonus = 0.35
-        score = round(min(overlap * 0.55 + profile.confidence * 0.25 + bonus, 1), 3)
+            bonus = 0.2
+        score = round(
+            min(
+                overlap * 0.3
+                + semantic_overlap * 0.3
+                + profile.confidence * 0.15
+                + specificity * 0.15
+                + evidence_breadth * 0.1
+                + bonus
+                + title_match_bonus,
+                1,
+            ),
+            3,
+        )
         supported = self._supported_summary(profile)
         if bonus:
             reason = (
-                f"{profile.canonical_title} is a strong role match because approved "
-                f"evidence supports {supported}."
+                f"{profile.canonical_title} is a strong role match because it "
+                f"demonstrates {supported}."
             )
         elif overlap:
             reason = (
-                f"Approved evidence from {profile.canonical_title} overlaps with the "
-                f"target through {supported}."
+                f"{profile.canonical_title} overlaps with the target through "
+                f"{supported}."
             )
         else:
             reason = (
-                f"{profile.canonical_title} supplies approved supporting context, "
+                f"{profile.canonical_title} supplies supporting project context, "
                 "though its target overlap is limited."
             )
         return _RankedProfile(profile=profile, score=score, target_reason=reason)
@@ -1925,7 +4055,7 @@ class ApplicationPackageService:
         )
         if values:
             return self._join(values[:5])
-        return "limited approved project context"
+        return "limited project context"
 
     @staticmethod
     def _has_substantive_profile(profile: CompiledCareerMemoryProfile) -> bool:
@@ -1988,7 +4118,7 @@ class ApplicationPackageService:
             parts.append(self._join(profile.methods[:4]))
         if profile.findings_or_results:
             parts.append(profile.findings_or_results[0])
-        detail = "; ".join(parts) or "approved project context"
+        detail = "; ".join(parts) or "project context"
         return f"{profile.canonical_title} — {detail}."
 
     def _target_focus(
@@ -2139,6 +4269,10 @@ class ApplicationPackageService:
             required_skills=package.required_skills,
             preferred_skills=package.preferred_skills,
             responsibilities=package.responsibilities,
+            application_questions=[
+                ApplicationQuestion.model_validate(question)
+                for question in package.application_questions
+            ],
             selected_memory_ids=self._uuid_list(package.selected_memory_ids),
             status=effective_status,
             latest_version=latest,
@@ -2159,6 +4293,22 @@ class ApplicationPackageService:
             enrichment_ids_used=latest.enrichment_ids_used if latest else [],
             outcome_signal_ids_used=(latest.outcome_signal_ids_used if latest else []),
             unsupported_claims=outputs.unsupported_claims if outputs else [],
+            writing_intelligence=(latest.writing_intelligence if latest else None),
+            requirement_coverage=(latest.requirement_coverage if latest else None),
+            quality_review=(latest.quality_review if latest else None),
+            provider_metadata=(latest.provider_metadata if latest else None),
+            validation_summary=(latest.validation_summary if latest else None),
+            evidence_groups=(
+                self._group_evidence(latest.evidence_trace) if latest else []
+            ),
+            warning_groups=(
+                self._group_warnings(
+                    latest.warnings,
+                    latest.requirement_coverage,
+                )
+                if latest
+                else ApplicationWarningGroups()
+            ),
             created_at=package.created_at,
             updated_at=package.updated_at,
         )
@@ -2167,6 +4317,32 @@ class ApplicationPackageService:
         self,
         version: ApplicationPackageVersion,
     ) -> ApplicationPackageVersionView:
+        outputs = ApplicationPackageOutputs.model_validate(
+            version.generated_outputs_json
+        )
+        intelligence = self._stored_intelligence(version, outputs)
+        quality = (
+            ApplicationWritingQualityReview.model_validate(version.quality_review_json)
+            if version.quality_review_json
+            else self._evaluate_output_quality(outputs)
+        )
+        metadata = (
+            ApplicationProviderMetadata.model_validate(version.provider_metadata_json)
+            if version.provider_metadata_json
+            else ApplicationProviderMetadata(
+                provider="local-deterministic",
+                model=None,
+                review_pass_ran=False,
+            )
+        )
+        validation = (
+            ApplicationValidationSummary.model_validate(version.validation_summary_json)
+            if version.validation_summary_json
+            else ApplicationValidationSummary(
+                status="PASS",
+                notes=["Legacy Sprint 14 version; deterministic trust checks apply."],
+            )
+        )
         return ApplicationPackageVersionView(
             id=version.id,
             package_id=version.package_id,
@@ -2174,9 +4350,7 @@ class ApplicationPackageService:
             target_snapshot=version.target_snapshot_json,
             selected_memory_ids=self._uuid_list(version.selected_memory_ids_json),
             input_fingerprint=version.input_fingerprint,
-            outputs=ApplicationPackageOutputs.model_validate(
-                version.generated_outputs_json
-            ),
+            outputs=outputs,
             evidence_trace=[
                 ApplicationEvidenceTrace.model_validate(item)
                 for item in version.evidence_trace_json
@@ -2199,7 +4373,261 @@ class ApplicationPackageService:
             generation_reason=ApplicationPackageGenerationReason(
                 version.generation_reason
             ),
+            writing_intelligence=intelligence,
+            requirement_coverage=intelligence.requirement_coverage,
+            quality_review=quality,
+            provider_metadata=metadata,
+            validation_summary=validation,
             created_at=version.created_at,
+        )
+
+    def _stored_intelligence(
+        self,
+        version: ApplicationPackageVersion,
+        outputs: ApplicationPackageOutputs,
+    ) -> ApplicationWritingIntelligence:
+        if version.writing_intelligence_json:
+            return ApplicationWritingIntelligence.model_validate(
+                version.writing_intelligence_json
+            )
+        target = version.target_snapshot_json
+        role = str(target.get("role_title") or "target role")
+        coverage = RequirementCoverage(
+            unsupported=[
+                RequirementCoverageItem(
+                    requirement=str(item.get("requirement")),
+                    evidence=[],
+                    memory_ids=self._uuid_list(item.get("memory_ids") or []),
+                )
+                for item in version.warnings_json
+                if item.get("code") == "UNSUPPORTED_TARGET_REQUIREMENT"
+                and item.get("requirement")
+            ]
+        )
+        return ApplicationWritingIntelligence(
+            job_understanding=ApplicationJobUnderstanding(
+                role_family=self._role_family(role),
+                seniority=self._role_seniority(role),
+                central_objective=f"Contribute to the {role} responsibilities.",
+                core_responsibilities=[
+                    str(item) for item in target.get("responsibilities") or []
+                ],
+                must_have_requirements=[
+                    str(item) for item in target.get("required_skills") or []
+                ],
+                preferred_requirements=[
+                    str(item) for item in target.get("preferred_skills") or []
+                ],
+            ),
+            requirement_coverage=coverage,
+            claim_plan=ApplicationClaimPlan(
+                primary_positioning=outputs.positioning_summary.primary_positioning,
+                primary_proof=outputs.positioning_summary.strongest_evidence,
+                secondary_proof=outputs.positioning_summary.secondary_evidence,
+                unsupported_requirements=[
+                    item.requirement for item in coverage.unsupported
+                ],
+                claims_not_to_make=outputs.positioning_summary.do_not_claim,
+                missing_evidence=outputs.positioning_summary.risks_and_gaps,
+                resume_strategy="Lead with the strongest supported project proof.",
+                cover_letter_narrative_strategy=(
+                    "Connect two concise proof points to the target role."
+                ),
+                snippet_strategy="Answer directly with one supported example.",
+                tone="Direct, professional, and evidence-aware.",
+            ),
+            strategy_notes=["Legacy Sprint 14 version with derived intelligence."],
+        )
+
+    @classmethod
+    def _group_evidence(
+        cls,
+        traces: list[ApplicationEvidenceTrace],
+    ) -> list[ApplicationEvidenceGroup]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for trace in traces:
+            key = str(trace.memory_id) if trace.memory_id else "target-context"
+            group = grouped.setdefault(
+                key,
+                {
+                    "memory_id": trace.memory_id,
+                    "memory_title": trace.memory_title or "Target role context",
+                    "direct_proof": [],
+                    "approved_enrichment": [],
+                    "supported_framing": [],
+                    "strategy_signals": [],
+                    "target_relevance": [],
+                },
+            )
+            if trace.support_type == EvidenceSupportType.STRATEGY_ONLY:
+                bucket = "strategy_signals"
+            elif trace.support_type == EvidenceSupportType.RELEVANCE_ONLY:
+                bucket = "target_relevance"
+            elif trace.support_type == EvidenceSupportType.INFERRED_FRAMING:
+                bucket = "supported_framing"
+            elif trace.source_type == EvidenceSourceType.APPROVED_ENRICHMENT:
+                bucket = "approved_enrichment"
+            else:
+                bucket = "direct_proof"
+            detail = " ".join(trace.detail.split()).strip()
+            if detail and detail not in group[bucket]:
+                group[bucket].append(detail)
+        return [
+            ApplicationEvidenceGroup.model_validate(value)
+            for value in grouped.values()
+            if any(
+                value[name]
+                for name in (
+                    "direct_proof",
+                    "approved_enrichment",
+                    "supported_framing",
+                    "strategy_signals",
+                    "target_relevance",
+                )
+            )
+        ]
+
+    @staticmethod
+    def _group_warnings(
+        warnings: list[ApplicationPackageWarning],
+        coverage: RequirementCoverage,
+    ) -> ApplicationWarningGroups:
+        unsupported_codes = {
+            "UNSUPPORTED_TARGET_REQUIREMENT",
+            "UNSUPPORTED_EDITED_NUMBER",
+            "UNSUPPORTED_EDITED_CLAIM",
+            "CROSS_MEMORY_EDITED_CLAIM",
+            "UNSUPPORTED_GENERATED_CLAIM",
+        }
+        missing_codes = {
+            "NO_QUANTIFIED_OUTCOME",
+            "SPARSE_APPROVED_MEMORY",
+            "MEMORY_CLAIM_BOUNDARY",
+        }
+        return ApplicationWarningGroups(
+            strongly_supported=[
+                item.requirement for item in coverage.strongly_supported
+            ],
+            partially_supported=[
+                ApplicationPackageWarning(
+                    code="PARTIAL_REQUIREMENT_COVERAGE",
+                    message=(
+                        f"{item.requirement} has related proof, but the match is not "
+                        "direct enough for a stronger claim."
+                    ),
+                    severity=ApplicationWarningSeverity.CAUTION,
+                    requirement=item.requirement,
+                    memory_ids=item.memory_ids,
+                )
+                for item in coverage.partially_supported
+            ],
+            unsupported=[item for item in warnings if item.code in unsupported_codes],
+            missing_proof=[item for item in warnings if item.code in missing_codes],
+        )
+
+    @classmethod
+    def _evaluate_output_quality(
+        cls,
+        outputs: ApplicationPackageOutputs,
+    ) -> ApplicationWritingQualityReview:
+        bullets = [
+            bullet.bullet_text
+            for group in outputs.resume_bullets
+            for bullet in group.bullets
+        ]
+        prose = " ".join(
+            [
+                outputs.positioning_summary.primary_positioning,
+                outputs.cover_letter.full_text,
+                *(snippet.text for snippet in outputs.application_snippets),
+                *bullets,
+            ]
+        )
+        lowered = prose.casefold()
+        mechanical = [
+            phrase
+            for phrase in (
+                "focused on the project tested whether",
+                "the documented result was",
+                "my approved work",
+                "documented experience with",
+                "the approved evidence reports",
+                "approved memory",
+                "approved evidence",
+            )
+            if phrase in lowered
+        ]
+        long_bullets = [item for item in bullets if len(item.split()) > 38]
+        comma_chains = [
+            sentence
+            for sentence in re.split(r"(?<=[.!?])\s+", prose)
+            if sentence.count(",") >= 4
+        ]
+        cover_words = len(outputs.cover_letter.full_text.split())
+        titles = [group.memory_title.casefold() for group in outputs.resume_bullets]
+        repeated_titles = [title for title in titles if lowered.count(title) > 4]
+        generic_markers = sum(
+            lowered.count(phrase)
+            for phrase in (
+                "i am applying for",
+                "i would welcome the opportunity",
+                "careful analysis",
+                "contribute thoughtfully",
+            )
+        )
+        warning_overload = (
+            len(outputs.cover_letter.warnings) + len(outputs.unsupported_claims) > 6
+        )
+        role_specific = bool(
+            outputs.positioning_summary.recommended_emphasis
+            and re.search(
+                r"\b(?:role|application|team)\b",
+                outputs.positioning_summary.primary_positioning,
+                re.I,
+            )
+        )
+        notes: list[str] = []
+        if mechanical:
+            notes.append("Replace mechanical source-field language with natural prose.")
+        if long_bullets:
+            notes.append("Shorten resume bullets to one central idea.")
+        if comma_chains:
+            notes.append("Reduce technical comma chains for faster reading.")
+        if not 230 <= cover_words <= 420:
+            notes.append(
+                f"Cover letter is {cover_words} words; aim for roughly 250–400."
+            )
+        if repeated_titles:
+            notes.append("Reduce repeated project titles after the first reference.")
+        if warning_overload:
+            notes.append("Resolve or consolidate the highest-priority proof gaps.")
+        if generic_markers > 4:
+            notes.append("Replace generic transitions with role-specific value.")
+        primary_issue = (
+            notes[0] if notes else "No material writing-quality issue detected."
+        )
+        natural = "Needs attention" if mechanical else "Strong"
+        concise = "Needs attention" if long_bullets or comma_chains else "Good"
+        readable = "Needs attention" if mechanical or comma_chains else "Strong"
+        genericness = (
+            "High" if generic_markers > 4 else "Moderate" if generic_markers else "Low"
+        )
+        return ApplicationWritingQualityReview(
+            evidence_support=("Strong" if not outputs.unsupported_claims else "Good"),
+            role_relevance="Strong" if role_specific else "Good",
+            specificity="Strong" if outputs.resume_bullets else "Limited",
+            naturalness=natural,
+            concision=concise,
+            recruiter_readability=("Needs attention" if warning_overload else readable),
+            genericness=genericness,
+            repetition="Moderate" if repeated_titles else "Low",
+            overclaim_risk=(
+                "Review"
+                if any("Unverified" in item for item in outputs.unsupported_claims)
+                else "Low"
+            ),
+            primary_issue=primary_issue,
+            notes=notes[:4],
         )
 
     def _list_item(
@@ -2266,6 +4694,21 @@ class ApplicationPackageService:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
+    def _stable_contract_id(prefix: str, *components: object) -> str:
+        """Build an order-independent ID from immutable source identity and content."""
+
+        normalized = [
+            " ".join(str(component).split()).casefold() for component in components
+        ]
+        encoded = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()[:32]
+        return f"{prefix}-{digest}"
+
+    @staticmethod
     def _target_snapshot(package: ApplicationPackage) -> dict[str, Any]:
         return {
             "opportunity_id": (
@@ -2279,6 +4722,7 @@ class ApplicationPackageService:
             "required_skills": package.required_skills,
             "preferred_skills": package.preferred_skills,
             "responsibilities": package.responsibilities,
+            "application_questions": package.application_questions,
         }
 
     @staticmethod
@@ -2481,9 +4925,9 @@ class ApplicationPackageService:
         )
         first_person = r"(?:\bI\b|\bmy\b|\bwe\b|\bour\b)"
         claim_verb = (
-            r"(?:use|used|built|build|deploy\w*|develop\w*|implement\w*|"
+            r"\b(?:use|used|built|build|deploy\w*|develop\w*|implement\w*|"
             r"manage\w*|lead|led|train\w*|automat\w*|bring|experience|"
-            r"proficien\w*|skill\w*|worked)"
+            r"proficien\w*|skill\w*|worked)\b"
         )
         unsupported: list[str] = []
         for claim in claims:
@@ -2555,6 +4999,101 @@ class ApplicationPackageService:
                 ):
                     unsupported.append(marker)
         return cls._unique(unsupported)
+
+    @classmethod
+    def _unsupported_outcomes_for_claims(
+        cls,
+        claims: list[_EditedClaim],
+        profile_snapshots: list[dict[str, Any]],
+    ) -> list[str]:
+        outcome_patterns = (
+            r"\bimprov\w*\b",
+            r"\bincreas\w*\b",
+            r"\breduc\w*\b",
+            r"\bboost\w*\b",
+            r"\bsav(?:ed|ing)\b",
+            r"\bearn\w*\b",
+            r"\bwon\b",
+            r"\bachiev\w*\b",
+            r"\baccelerat\w*\b",
+            r"\bresulted\s+in\b",
+            r"\bled\s+to\b",
+            r"\bdrove\b",
+        )
+        object_stop = {
+            "a",
+            "an",
+            "and",
+            "for",
+            "in",
+            "of",
+            "our",
+            "the",
+            "their",
+            "this",
+            "to",
+            "with",
+        }
+        unsupported: list[str] = []
+        for claim in claims:
+            approved = cls._snapshot_positive_text(
+                cls._snapshots_for_ids(profile_snapshots, claim.memory_ids)
+            ).casefold()
+            for pattern in outcome_patterns:
+                for match in re.finditer(pattern, claim.text, re.I):
+                    if not re.search(pattern, approved, re.I):
+                        unsupported.append(match.group(0))
+                        continue
+                    tail = claim.text[match.end() :]
+                    object_tokens = [
+                        token
+                        for token in re.findall(r"[a-z][a-z0-9+-]{2,}", tail.casefold())
+                        if token not in object_stop
+                    ]
+                    if object_tokens and object_tokens[0] not in approved:
+                        unsupported.append(f"{match.group(0)} {object_tokens[0]}")
+        return cls._unique(unsupported)
+
+    @classmethod
+    def _strategy_signal_leakage_for_claims(
+        cls,
+        claims: list[_EditedClaim],
+        profile_snapshots: list[dict[str, Any]],
+        writing_input: ApplicationWritingInput,
+    ) -> list[str]:
+        if not writing_input.outcome_signals:
+            return []
+        approved = cls._snapshot_positive_text(profile_snapshots).casefold()
+        signal_text = " ".join(
+            f"{signal.label} {signal.content}"
+            for signal in writing_input.outcome_signals
+        )
+        high_risk_signal_terms = {
+            "acceptance",
+            "accepted",
+            "callback",
+            "conversion",
+            "hired",
+            "hiring",
+            "interview",
+            "invitation",
+            "invited",
+            "offer",
+            "recruiter",
+            "selected",
+        }
+        signal_only_tokens = {
+            token
+            for token in re.findall(r"[a-z][a-z0-9+-]{4,}", signal_text.casefold())
+            if token in high_risk_signal_terms and token not in approved
+        }
+        leaked = {
+            token
+            for claim in claims
+            for token in signal_only_tokens
+            if re.search(cls._literal_pattern(token), claim.text, re.I)
+        }
+        return sorted(leaked)
 
     @classmethod
     def _profile_capability_text(
@@ -2763,12 +5302,66 @@ class ApplicationPackageService:
     def _problem_phrase(cls, value: str) -> str:
         cleaned = " ".join(value.split()).strip().rstrip(".")
         cleaned = re.sub(
-            r"^(?:the\s+)?project\s+(?:focused|focuses)\s+on\s+",
+            r"^(?:the\s+)?project\s+(?:(?:focused|focuses)\s+on\s+|tested\s+whether\s+)",
             "",
             cleaned,
             flags=re.I,
         )
         return cls._lower_first(cleaned)
+
+    @staticmethod
+    def _compact_phrase(value: str, word_limit: int) -> str:
+        cleaned = " ".join(value.split()).strip().rstrip(".;")
+        words = cleaned.split()
+        if len(words) <= word_limit:
+            return cleaned
+        return " ".join(words[:word_limit]).rstrip(",;:")
+
+    @staticmethod
+    def _contains_mechanical_phrase(value: str) -> bool:
+        lowered = value.casefold()
+        return any(
+            phrase in lowered
+            for phrase in (
+                "focused on the project tested whether",
+                "the documented result was",
+                "my approved work",
+                "documented experience with",
+                "the approved evidence reports",
+                "approved memory",
+                "approved evidence",
+            )
+        )
+
+    @staticmethod
+    def _role_family(role_title: str) -> str:
+        value = role_title.casefold()
+        if any(token in value for token in ("data science", "data scientist")):
+            return "Data science"
+        if any(token in value for token in ("analytics", "data analyst")):
+            return "Analytics"
+        if any(token in value for token in ("machine learning", "ai ", "artificial")):
+            return "AI and machine learning"
+        if "research" in value:
+            return "Research"
+        if any(token in value for token in ("software", "engineer", "developer")):
+            return "Engineering"
+        if any(token in value for token in ("lead", "manager", "operations")):
+            return "Leadership and operations"
+        return "General professional"
+
+    @staticmethod
+    def _role_seniority(role_title: str) -> str:
+        value = role_title.casefold()
+        if "intern" in value:
+            return "Internship"
+        if any(token in value for token in ("entry", "junior", "associate")):
+            return "Entry level"
+        if any(token in value for token in ("senior", "staff", "principal")):
+            return "Senior"
+        if any(token in value for token in ("manager", "director", "lead")):
+            return "Leadership"
+        return "Not explicitly stated"
 
     @staticmethod
     def _join(values: list[str]) -> str:

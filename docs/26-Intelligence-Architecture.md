@@ -169,7 +169,7 @@ memory instead of showing stale content under a different selection.
 The Sprint 14 Application Package Builder compiles every explicitly selected
 approved memory independently, ranks the resulting profiles for a target, and
 creates a structured positioning summary, resume bullets, cover letter,
-application snippets, and proof-artifact suggestions. It does not query raw
+answers for explicit application questions, and proof-artifact suggestions. It does not query raw
 records broadly to assemble prose, and it does not use a target posting as a
 career fact.
 
@@ -203,6 +203,47 @@ resume wording with its exact memory, detects cross-memory borrowing, ignores
 negated/limitation clauses as support, and emits `BLOCKING` warnings for
 unsupported numbers or recognized capabilities. Audit findings are recomputed
 so corrected edits can clear them.
+
+## Sprint 14.1 writing-provider boundary
+
+Sprint 14.1 inserts a typed provider boundary after approved evidence has been
+compiled, filtered, semantically ranked, and narrowed to the best 2-4 memories.
+The provider returns structured job understanding, coverage, claim plans,
+drafts, evidence references, and concise review notes. Persistence still occurs
+only after CareerOS revalidates claims, tools, metrics, memory boundaries,
+strategy labels, target-only context, and excluded-record rules.
+
+`local-deterministic` and `openai` implement the same contract. The OpenAI
+adapter uses the Responses API, strict Structured Outputs, `store=false`, and
+server-held configuration. This seam can accept a future Anthropic provider
+without letting any provider own compilation, policy, readiness, or versioning.
+Provider failure cannot remove prior versions or create an empty version.
+
+The data-policy check is also server-owned. `private` allows minimized approved
+user context for a suitable non-shared project. `demo-shared` admits only seeded
+or explicitly marked demo profiles and rejects obvious identifiers before a
+request. See [29-GPT-5.6-Application-Writing-Intelligence.md](29-GPT-5.6-Application-Writing-Intelligence.md)
+and [30-Build-Week-Demo-Data-and-Privacy.md](30-Build-Week-Demo-Data-and-Privacy.md).
+
+### Sprint 14.1.2 question/answer boundary
+
+The writing input contains an ordered `application_questions` list. Each item
+has `question_id`, `question_text`, `required`, optional `maximum_length`,
+optional `response_type`, and `relevant_target_requirement_ids` when applicable.
+The provider therefore never infers an answer count or invents generic prompts.
+Returned application answers map to that list by `question_id`; deterministic
+validation enforces required coverage, known and unique IDs, non-empty required
+answers, and input order. Optional unanswered questions may be absent, and an
+empty question list requires an empty snippet list.
+
+A missing required answer is a structural failure, not a hallucination. It is
+eligible for one targeted provider repair containing only the missing question
+IDs/text, already valid package sections, relevant evidence atoms, prohibited
+claims, and the strict answer schema. Only repaired answers are merged before
+the entire package is validated again; resume and cover-letter sections are not
+regenerated. Unsupported tools, outcomes, or evidence references in a repaired
+answer remain blocked by the unchanged Sprint 14.1.1 factual-claim gate. The
+same `private`/`demo-shared` policy applies to generation and repair.
 
 ## Outcome signals
 

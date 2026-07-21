@@ -2,8 +2,9 @@
 
 ## Status
 
-Sprint 14 implementation guide. The builder is available through the
-`/application-packages` workspace and the `/api/application-packages` API.
+Sprint 14, 14.1, 14.1.1, and 14.1.2 implementation guide. The builder is
+available through the `/application-packages` workspace and the
+`/api/application-packages` API.
 
 CareerOS does not generate application text from an unconstrained prompt. It
 builds a reviewable package from exact, user-selected approved Career Memory and
@@ -17,7 +18,7 @@ An application package contains:
   list;
 - role-tailored resume bullet groups;
 - a structured cover-letter draft with paragraph-level traces;
-- five common application-answer snippets;
+- application answers matched to explicitly supplied questions;
 - ready proof artifacts to attach, draft artifacts to finish reviewing, or proof
   artifacts worth building;
 - reviewer questions, unsupported-claim warnings, and a human-readable evidence
@@ -26,29 +27,114 @@ An application package contains:
 
 The package workspace stores target details separately from generated versions.
 The target can include a linked opportunity plus role title, company, location,
-job type, description, required/preferred skills, responsibilities, and explicit
-approved-memory selections.
+job type, description, required/preferred skills, responsibilities, an ordered
+application-question list, and explicit approved-memory selections.
 
 ## Generation path
 
 ```text
 Target context (relevance only)
+  + explicit ordered application questions
   + exact selected approved memory IDs
   -> compile each memory independently
   -> rank approved profiles for the target
-  -> compose positioning, bullets, letter, snippets, and proof suggestions
+  -> build immutable evidence atoms
+  -> compose structured candidate claims and analysis
+  -> sanitize narrowly and validate candidate claims
   -> audit requirements and assemble claim/evidence traces
   -> save an immutable package version
 ```
 
-Generation is deterministic and does not require an OpenAI or Anthropic key.
-The generator version is stored with every saved version. Role text can change
-ranking and wording, but it cannot add a fact to a compiled profile.
+Local generation is deterministic and does not require an OpenAI or Anthropic
+key. An optional OpenAI provider receives the same bounded writing input and is
+subject to the same deterministic validation before persistence. The provider,
+model, and generator version are stored safely with saved versions. Role text
+can change ranking and wording, but it cannot add a fact to a compiled profile.
 
-The current composer uses up to four ranked memories for resume groups, the two
-strongest profiles for the cover letter, and the three strongest profiles for
-proof-artifact suggestions. It returns five copy-ready snippets and up to five
-reviewer questions.
+The current pipeline recommends and selects 2-4 ranked memories by default,
+while preserving manual additions, removals, and order. It returns concise
+resume groups, a natural cover letter, direct answers for the supplied
+application questions, proof suggestions, and reviewer questions.
+
+### Writing providers and deterministic validation
+
+The provider seam sits between compiled/ranked evidence and immutable version
+persistence. `local-deterministic` is the key-free default. `openai` uses one
+strict structured Responses API request with `store=false`; its default writer
+is `gpt-5.6-terra`. An optional `gpt-5.6-sol` recruiter review/rewrite is
+disabled by default and cannot add evidence or claims. The interface is neutral
+enough to add another provider, including Anthropic, without rewriting package
+truth and persistence logic.
+
+Both paths perform semantic job understanding, memory ranking, claim planning,
+drafting, recruiter critique, and quality evaluation. Broad requirements such
+as analytics, reporting, modeling, communication, and data quality can match
+equivalent approved proof. Concrete tools still require direct proof.
+CareerOS then validates factual claims, tools, metrics, cross-memory boundaries,
+strategy-only labels, evidence references, and excluded records before saving.
+Provider errors do not erase existing output or create empty versions.
+
+### Sprint 14.1.1 claim contract and persistence gate
+
+The provider no longer relies on free-text evidence labels as its primary claim
+contract. CareerOS supplies immutable evidence atoms with stable atom/approved-
+claim IDs, canonical-memory ownership, optional enrichment and proof-artifact
+IDs, direct source references, factual text, supported tools/methods, structured
+outcome support, allowed certainty, support type, and prohibited expansions.
+Each candidate-facing positioning, resume, cover-letter, or application-answer
+field must return an exact claim record with its evidence-atom IDs, type, tools,
+outcome, and certainty.
+
+Analysis fields remain separate: job understanding, requirement coverage,
+unsupported requirements, missing-proof/do-not-claim guidance, reviewer
+questions, proof suggestions, target-job tool lists, and quality/critic/
+validation notes do not become applicant claims merely because they mention a
+tool or outcome. AWS or Kubernetes may therefore appear as an unsupported gap,
+while the same term is blocked as candidate experience unless a cited direct
+atom explicitly supports it.
+
+Outcome validation compares structured source, action, object, result,
+qualifier, certainty, metric, and project ownership. It permits harmless
+paraphrasing but blocks material object/result changes, metric invention,
+certainty inflation, reference drift, and cross-memory transfer. Before a
+version is saved, a narrow sanitizer may remove only a separable optional
+unsupported-warning sentence. The repair is recorded in validation metadata;
+central factual claims are never silently rewritten, and an unsafe draft
+creates no new version.
+
+Safe failure diagnostics contain only a stable code, section, field path,
+normalized disputed phrase, evidence IDs, expected evidence category, and the
+`user-facing`/`analysis-only` classification. Prompts, private career context,
+full responses, credentials, headers, and hidden reasoning are excluded.
+
+### Sprint 14.1.2 application question/answer contract
+
+Application questions are persisted on the package and passed explicitly to
+both providers. Each ordered question supplies `question_id`, `question_text`,
+`required`, optional `maximum_length`, optional `response_type`, and
+`relevant_target_requirement_ids` where applicable. The provider must not infer
+how many answers exist or manufacture generic prompts to satisfy a fixed count.
+
+Each returned application answer includes `question_id`, answer text,
+`evidence_reference_ids`, `evidence_atom_ids`, `tools_claimed`,
+`outcome_claimed`, `certainty`, and `validation_metadata`. Exactly one non-empty
+answer is required for each required question. Unknown or duplicate IDs are
+invalid, answers preserve supplied question order, optional unanswered
+questions may be omitted, and zero supplied questions requires zero snippets.
+The structural validation codes are
+`MISSING_REQUIRED_APPLICATION_ANSWER`, `DUPLICATE_APPLICATION_ANSWER`,
+`UNKNOWN_APPLICATION_QUESTION_ID`, `EMPTY_APPLICATION_ANSWER`, and
+`APPLICATION_ANSWER_ORDER_MISMATCH`.
+
+A missing required answer is eligible for the single structured repair budget.
+The repair input is restricted to missing question IDs/text, already valid
+package sections, relevant evidence atoms, prohibited claims, and the strict
+answer schema. The service merges only repaired answers and validates the whole
+package again; it does not regenerate a valid resume or cover letter. A failed
+repair creates no version and preserves the prior immutable output. Repaired
+answers remain candidate-facing claims, so unsupported tools/outcomes and
+missing or invalid evidence references are still rejected. Sprint 14.1.1 claim
+validation and the `private`/`demo-shared` data policy are unchanged.
 
 ## Trust boundaries
 
@@ -151,13 +237,20 @@ Migration `20260715_0011` adds two tables:
   outputs, evidence trace, warnings, claim ledger, IDs used, edits, generator
   version, fingerprint, reason, and timestamp.
 
+Sprint 14.1 migration `20260717_0012` adds JSON-backed writing-intelligence,
+quality-review, safe provider-metadata, and validation-summary fields. Sprint
+14.1.1 reuses that boundary; it adds no migration and leaves `20260717_0012`
+unchanged. Sprint 14.1.2 migration `20260721_0013` adds the ordered
+`application_questions` JSONB input to the mutable package workspace.
+
 Generation reasons are `GENERATED`, `REGENERATED`, and `USER_EDIT`. Every
 generation, regeneration, or saved edit creates the next version number and
 returns the package to `DRAFT` for review.
 
-The input fingerprint covers the target snapshot, selected memory IDs, and the
-current compiled-profile snapshots. If target settings, selections, or approved
-proof change, the package reports `is_stale`. A stale package cannot be marked
+The input fingerprint covers the target snapshot, ordered application questions,
+selected memory IDs, and the current compiled-profile snapshots. If target
+settings, questions, selections, or approved proof change, the package reports
+`is_stale`. A stale package cannot be marked
 `READY`, is exposed as `DRAFT` even if approved proof changed after readiness,
 and cannot accept edited outputs until it is regenerated. Target-input changes
 also demote a stored ready package when they make its version stale. A current
@@ -196,8 +289,13 @@ packages appear only when the user enables the archived view.
 
 The review surface provides:
 
+- separate recommended and selected memories, with 2-4 recommendations selected
+  by default unless the user has saved a manual selection;
+- grouped requirement coverage, warnings, and deduplicated evidence traces by
+  canonical memory;
+- a concise writing-quality review and discreet provider/model label;
 - editable primary/strongest positioning text, resume-bullet text, full
-  cover-letter text, and five answer snippets;
+  cover-letter text, and each supplied-question answer;
 - copy controls for individual sections, the full package, and historical
   versions;
 - bullet/snippet evidence details and paragraph-level cover-letter traces;
@@ -224,8 +322,8 @@ first-class review surfaces, not hidden metadata.
 
 ## Current limits
 
-- Requirement detection and prose composition use bounded deterministic
-  heuristics, not open-ended job-posting interpretation.
+- Local requirement interpretation remains intentionally bounded; the OpenAI
+  path adds semantic interpretation but cannot override factual validation.
 - The package does not overwrite a base resume or submit an application.
 - Copy controls are the practical output path; PDF/DOCX layout and ATS
   guarantees are not part of Sprint 14.
@@ -234,6 +332,9 @@ first-class review surfaces, not hidden metadata.
   content and Career Diagnosis are not silently treated as factual sources.
 - Package-version-linked outcome tracking belongs to the later application
   tracker; existing outcome signals remain compiler-bounded strategy context.
+- Sprint 14.1.1 non-live backend and frontend verification is complete. Sprint
+  14.1.2 made no live provider request; OpenAI acceptance remains separately
+  gated by `RUN_LIVE_OPENAI_TESTS=true` and explicit user approval.
 
 ## MVP impact
 

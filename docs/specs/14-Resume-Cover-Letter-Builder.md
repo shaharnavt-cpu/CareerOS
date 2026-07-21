@@ -1,9 +1,12 @@
 # Sprint 14: Resume and Cover Letter Builder
 
-**Status:** implemented.
+**Status:** Sprint 14 implemented; Sprint 14.1 provider/intelligence extension,
+Sprint 14.1.1 claim-contract hardening, and Sprint 14.1.2 application-question/
+answer alignment are in the current working tree. Live OpenAI acceptance remains
+pending.
 **Product surface:** Application Package Builder.
 **Route:** `/application-packages`.
-**Migration:** `20260715_0011`.
+**Migrations:** `20260715_0011`, `20260717_0012`, `20260721_0013`.
 **Depends on:** approved Canonical Career Memory, approved Project Evidence
 Enrichment, Career Memory Compiler, Proof Artifact Builder, and Application
 Intelligence opportunity records.
@@ -19,7 +22,7 @@ reviewable, and versioned application package. One package can contain:
 - a positioning summary;
 - tailored resume bullets grouped by approved memory;
 - a cover-letter draft;
-- five common application-answer snippets;
+- answers for explicitly supplied application questions;
 - suggested proof artifacts;
 - evidence traces, a claim ledger, warnings, unsupported claims, and reviewer
   questions; and
@@ -42,7 +45,8 @@ Target input supports:
 - role title, company, location, and job type;
 - job/role description;
 - required and preferred skill lists;
-- responsibility list; and
+- responsibility list;
+- up to 50 ordered structured application questions; and
 - up to 50 unique selected approved-memory IDs.
 
 Package lists exclude archived packages by default. An archived package remains
@@ -54,6 +58,7 @@ The factual input set is:
 
 ```text
 current user
+  + explicit application questions (target context only)
   + exact selected approved canonical memory IDs
   + approved enrichment linked to each exact memory
   + eligible linked evidence
@@ -104,8 +109,10 @@ For a generation request it:
 7. appends an immutable version with input/provenance snapshots.
 
 Current output bounds are intentionally small: up to four resume groups with up
-to two bullets each, two proof stories in the cover letter, five snippets, three
-proof-artifact suggestions, and five reviewer questions.
+to two bullets each, two proof stories in the cover letter, one answer for each
+supplied required application question, three proof-artifact suggestions, and
+five reviewer questions. Optional unanswered questions may be omitted, and an
+empty question list produces no snippets.
 
 ### Resume bullets
 
@@ -125,12 +132,12 @@ substantive project paragraphs carry direct and inferred-framing traces to
 their selected profiles. Outcome feedback, when present, appears only in
 `strategy_notes` with its non-proof caveat.
 
-### Positioning, snippets, and proof artifacts
+### Positioning, application answers, and proof artifacts
 
 The positioning summary identifies primary/secondary proof, risks, recommended
-emphasis, and a do-not-claim list. The five snippets answer interest, fit,
-project, challenge, and technical-skills prompts and retain their own traces and
-warnings.
+emphasis, and a do-not-claim list. Application answers correspond to the
+explicit ordered question list and retain their own traces and warnings; the
+service does not invent generic prompts to reach a fixed count.
 
 Proof Artifact Builder records are not imported as new factual evidence. A
 `READY` artifact is suggested as `ATTACH`; a non-archived draft or reviewed
@@ -241,7 +248,7 @@ archived packages on request, generate/regenerate, save edits, and change
 draft/ready/archive status.
 
 Editable UI fields are the primary and strongest positioning text, each resume
-bullet, the full cover letter, and each of the five snippets. Copy controls exist
+bullet, the full cover letter, and each supplied-question answer. Copy controls exist
 for individual outputs, the assembled package, and historical versions. The
 workspace also shows bullet/snippet traces, paragraph-level letter traces,
 warnings, unsupported/do-not-claim items, strategy notes, proof-artifact links,
@@ -277,6 +284,8 @@ Sprint 14's implementation is complete only while these regressions stay true:
 - outcome feedback is strategy-only and archived signals are excluded;
 - target requirements can produce relevance or warnings but not experience;
 - resume bullets, letter paragraphs, and snippets retain evidence traces;
+- required application questions have exactly one non-empty answer keyed by
+  `question_id`, while optional omission and zero-question output remain valid;
 - target, selection, or compiled-proof changes are detected as stale;
 - regeneration does not mutate approved memory;
 - unsupported edited numbers and recognized tool, skill, or deployment claims
@@ -286,7 +295,158 @@ Sprint 14's implementation is complete only while these regressions stay true:
 - blocking warnings prevent `READY`; and
 - archived packages are hidden from the default list.
 
-## 10. Deferred work
+## 10. Sprint 14.1 extension
+
+Sprint 14.1 preserves the Sprint 14 ownership, exact-memory, immutable-version,
+manual-edit audit, readiness, archive/restore, and stale-output contracts while
+moving writing behind a typed provider boundary. Supported providers are
+`local-deterministic` and `openai`; the boundary is designed so another adapter
+can be added without moving business logic out of the package service.
+
+### Provider and pipeline contract
+
+The provider receives only minimum relevant target context, an explicit ordered
+application-question list, semantically grouped requirements, 2-4 selected
+compiled memories, eligible approved enrichment/proof context, labeled
+strategy signals, prohibited claims, and missing proof. It returns structured
+job understanding, grouped coverage, a claim plan, positioning, resume groups,
+cover letter, answers keyed to supplied questions, reviewer questions, proof
+suggestions, evidence references, unsupported-claim candidates, strategy notes,
+and quality-review notes.
+
+The stages are semantic job understanding, memory ranking and default
+selection, claim planning, draft generation, recruiter critique, optional
+rewrite, and deterministic validation. Broad concepts such as analytics,
+reporting/communication, modeling, data quality, and research/problem solving
+can match equivalent approved proof. Python, SQL, R, Java, cloud platforms,
+Docker, Kubernetes, deployment, LLM/RAG/agent work, Tableau, Power BI, and other
+concrete tools require direct approved proof.
+
+The local provider requires no key and produces natural narrative, concise
+resume-grade bullets, and direct snippets without internal "approved evidence"
+language or mechanical field concatenation. A missing metric alone is not a
+readiness blocker.
+
+### OpenAI and data-policy contract
+
+The OpenAI adapter uses the Responses API, strict Structured Outputs,
+`store=false`, server-side credentials, configurable models/timeout/output
+limits/reasoning effort, and at most one bounded structured repair.
+Authentication,
+billing, rate-limit, timeout, refusal, malformed output, and provider failures
+produce safe actionable errors. The default is one `gpt-5.6-terra` call;
+`gpt-5.6-sol` review is disabled unless explicitly enabled. A failed optional
+review preserves valid Terra output. Every result is deterministically
+validated before persistence.
+
+`APPLICATION_WRITER_DATA_POLICY=private` permits minimized approved user data
+for an appropriate non-shared project. `demo-shared` permits only seeded or
+explicit demo profiles and rejects obvious identifiers server-side. The live
+smoke is gated by `RUN_LIVE_OPENAI_TESTS=true`, requires `demo-shared`, and uses
+the fictional Maya Chen fixture. The final post-hardening smoke remains pending
+until the user explicitly approves it.
+
+### Workspace contract
+
+Recommended and selected memories are separate, only 2-4 are selected by
+default, and saved manual removals/order are respected. Requirement coverage,
+warnings, and evidence are grouped; quality review and provider/model metadata
+are concise. Existing editable/copyable output, versions, `READY`, archive/
+restore, and stale-output protections remain regression-critical.
+
+### Sprint 14.1.1 claim contract and validator hardening
+
+Sprint 14.1.1 replaces free-text evidence labels as the primary provider claim
+contract with immutable server-authored evidence atoms. Each atom preserves a
+stable evidence/approved-claim ID, canonical-memory ownership, optional
+enrichment and proof-artifact IDs, direct source references, factual statement,
+supported tools/methods, structured outcome, allowed certainty, support type,
+and prohibited expansions. Target context and inferred framing remain distinct
+from direct factual proof.
+
+The output contract classifies positioning, resume bullets, cover-letter
+sections, and application answers as candidate-facing. Each requires exact
+structured claim metadata: field path/text, evidence-atom IDs, claim type,
+tools, outcome, and certainty. Job understanding, requirement coverage,
+unsupported requirements, missing-proof warnings, claims not to make, reviewer
+questions, proof suggestions, target-job tool lists, strategy notes, critic/
+quality notes, and validation notes are analysis-only. Unsupported tools are
+allowed in those gap/warning surfaces but blocked in candidate-facing text
+without direct atom support.
+
+Structured outcomes carry evidence source, action, object, result, qualifier,
+certainty, and optional metric. Semantic normalization allows harmless wording
+changes while deterministic checks reject changed objects/actions/results,
+metric changes, certainty inflation, unknown references, and cross-project
+leakage. Concrete tools, cloud/deployment, production, monitoring, and
+infrastructure claims require direct proof explicitly listed on a cited atom.
+
+The pre-persistence sanitizer can remove only a clearly separable optional
+unsupported-warning sentence. It records every removal in validation metadata
+and never rewrites a central factual claim. Material failures reject the entire
+new version, preserving the prior immutable package. Failure output is limited
+to the stable rule/code, section, field path, normalized phrase, evidence IDs,
+expected category, and surface classification; secrets, prompts, private
+context, full provider output, and hidden reasoning are never included.
+
+Regression coverage is mock-only and includes harmless outcome paraphrase,
+changed object/metric/certainty, cross-project leakage, analysis-only versus
+candidate-facing tool mentions, deployment claims, syntax-derived unknown
+tools, factual action tails, collective-actor changes, unstructured outcomes,
+safe-prefix injection, unknown/context-only atom references, recorded safe
+removal, refusal to repair a material claim, redacted smoke diagnostics, and
+preservation of the prior version on provider failure. The completed non-live
+verification passed backend Ruff, all 343 backend tests,
+Alembic current/check at `20260717_0012 (head)`, frontend lint and typecheck, all
+52 frontend tests, and the production build (14/14 pages generated).
+
+No database change is required for Sprint 14.1.1. It reuses the JSON-backed
+Sprint 14.1 version fields and leaves migration `20260717_0012` unchanged.
+
+### Sprint 14.1.2 application question/answer contract
+
+The package owns an ordered `application_questions` input. Each question has
+`question_id`, `question_text`, `required`, optional `maximum_length`, optional
+`response_type`, and `relevant_target_requirement_ids` where applicable. The
+question list is supplied on create/update and passed into generation. Neither
+provider may infer the expected answer count or manufacture generic questions.
+
+Every returned application answer has `question_id`, `answer`,
+`evidence_reference_ids`, `evidence_atom_ids`, `tools_claimed`,
+`outcome_claimed`, `certainty`, and `validation_metadata`. Deterministic
+structural validation requires exactly one non-empty answer for every required
+question, rejects unknown and duplicate IDs, and preserves input order. An
+optional unanswered question may be omitted. Zero questions requires zero
+snippets. Failures use the precise codes
+`MISSING_REQUIRED_APPLICATION_ANSWER`, `DUPLICATE_APPLICATION_ANSWER`,
+`UNKNOWN_APPLICATION_QUESTION_ID`, `EMPTY_APPLICATION_ANSWER`, and
+`APPLICATION_ANSWER_ORDER_MISMATCH`.
+
+Only a missing required answer is eligible for targeted answer repair. The one
+repair request includes missing question IDs/text, existing valid package
+sections, relevant evidence atoms, prohibited claims, and the strict answer
+schema. It cannot regenerate valid resume bullets or cover-letter sections.
+CareerOS merges only repaired answers and then validates the complete package
+again. Failed repair creates no new version and leaves the previous immutable
+version untouched.
+
+This structural alignment does not weaken Sprint 14.1.1. Application answers,
+including repaired answers, remain candidate-facing factual claims and still
+require valid evidence IDs and structured tool/outcome/certainty metadata.
+Unsupported tools or outcomes remain blocked. The `private` and `demo-shared`
+data-policy boundary is unchanged and applies equally to generation and repair.
+The Maya Chen fixture supplies exactly three required questions: `motivation`,
+`complex-data-project`, and `quality-reliability`.
+
+Sprint 14.1.2 migration `20260721_0013` persists ordered
+`application_questions` on the mutable package workspace. Final non-live
+verification passed backend Ruff, all 359 backend tests, Alembic current/check
+at `20260721_0013 (head)`, frontend lint/typecheck, all 52 frontend tests, and
+the production build (14/14 pages generated). `RUN_LIVE_OPENAI_TESTS` remains
+`false`; no live provider request was run for this alignment, and live OpenAI
+acceptance remains pending.
+
+## 11. Deferred work
 
 - PDF/DOCX and visual resume templates;
 - ATS scoring or guarantees;

@@ -43,7 +43,7 @@ The implemented product surfaces include:
 | Career Diagnosis | Assesses proof, gaps, and next actions from approved memory; approved outcome feedback remains a labeled strategy signal. |
 | Proof Artifact Builder | Produces editable, versioned, evidence-backed case studies and channel variants from one selected memory. |
 | Application Intelligence | Parses opportunities, matches approved memory, exposes gaps, and creates editable application-response drafts. |
-| Application Package Builder | Produces deterministic positioning, tailored bullets, a cover letter, five answer snippets, proof suggestions, evidence traces, warnings, and immutable versions from explicitly selected approved memory. |
+| Application Package Builder | Produces positioning, tailored bullets, a cover letter, snippets, proof suggestions, grouped evidence/warnings, quality review, and immutable versions through local or optional GPT-5.6 writing; deterministic validation remains the save gate. |
 | Teach CareerOS | Captures feedback/outcome signals for future strategy without rewriting factual proof. |
 
 ## Current architecture
@@ -53,9 +53,10 @@ CareerOS is a modular monolith:
 - Frontend: Next.js, React, TypeScript, and Tailwind CSS in `frontend/`.
 - Backend: FastAPI, SQLAlchemy, Alembic, and Python in `backend/`.
 - Database: PostgreSQL 16, normally started locally with Docker Compose.
-- Reasoning: deterministic local mode is supported without an LLM key. A
-  provider-compatible path exists for later use but is not required for local
-  development or the current proof workflow.
+- Reasoning: deterministic local mode is supported without an LLM key. The
+  application-writing provider boundary supports improved local generation and
+  an optional OpenAI Responses API path. No key is required for local
+  development or automated verification.
 
 The important data flow is:
 
@@ -105,6 +106,12 @@ The two current astronomy-project examples make this concrete:
 The most convincing current demonstration is not a generic document prompt. It
 shows the memory-to-proof loop:
 
+For Build Week or any shared demo-project traffic, use only the fictional Maya
+Chen fixture described in
+[30-Build-Week-Demo-Data-and-Privacy.md](30-Build-Week-Demo-Data-and-Privacy.md).
+The historical Gas/UNICORN examples below remain useful local regression paths,
+not approved personal-data inputs for the shared project.
+
 1. Open a project in **Enrich** and attach source-backed detail to the existing
    approved project memory.
 2. Approve the enrichment and see its memory-quality impact, project boundary,
@@ -142,6 +149,37 @@ The expected local services are:
 The committed `.env.example` configures local PostgreSQL and
 `REASONING_PROVIDER=local-deterministic`. Use the exact Windows CMD setup and
 test commands in [27-Claude-Code-Handoff.md](27-Claude-Code-Handoff.md).
+
+## Sprint 14.1 application-writing intelligence
+
+Sprint 14.1 places a provider-neutral seam between ranked compiled evidence and
+version persistence. `local-deterministic` remains the default; `openai` uses a
+strict structured Responses API request with `store=false`. The cost-safe live
+default is `gpt-5.6-terra`, with `gpt-5.6-sol` review disabled unless explicitly
+enabled. Every provider result passes deterministic evidence, claim, quality,
+and data-policy checks before an immutable version can be saved.
+
+The pipeline groups job requirements semantically, recommends and selects 2-4
+strong memories by default, plans claims, drafts, critiques, and can optionally
+rewrite. The workspace groups requirement coverage, warnings, and evidence by
+memory, and shows concise quality and provider metadata while preserving manual
+selection/order, edits, copies, versions, `READY`, archive/restore, and stale-
+output protections.
+
+Shared Build Week traffic is guarded by `demo-shared`, which accepts only
+seeded or explicitly marked demo profiles and rejects obvious personal
+identifiers before a provider request. The fictional Maya Chen fixture is the
+only intended live-smoke input. See
+[29-GPT-5.6-Application-Writing-Intelligence.md](29-GPT-5.6-Application-Writing-Intelligence.md)
+and [30-Build-Week-Demo-Data-and-Privacy.md](30-Build-Week-Demo-Data-and-Privacy.md).
+Sprint 14.1.2 replaces fixed snippet-count assumptions with structured
+application questions and answers keyed by `question_id`. Every supplied
+required question must receive exactly one non-empty answer in input order;
+optional unanswered questions may be omitted, and zero questions permits zero
+snippets. A missing required answer is eligible for one targeted answer-only
+repair that preserves valid resume and cover-letter sections. Claim/evidence
+validation and the `private`/`demo-shared` policy remain unchanged. No live
+request was run for Sprint 14.1.2, and live OpenAI acceptance remains pending.
 
 ## What is not built yet
 

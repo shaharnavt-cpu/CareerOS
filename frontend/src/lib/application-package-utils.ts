@@ -2,6 +2,9 @@ import type {
   ApplicationEvidenceSourceType,
   ApplicationEvidenceSupportType,
   ApplicationPackageGenerationReason,
+  ApplicationPackageMemoryOption,
+  ApplicationProviderMetadata,
+  ApplicationQuestion,
   ApplicationPackageOutputs,
   ApplicationPackageStatus,
   ApplicationPackageVersion,
@@ -19,6 +22,7 @@ export type ApplicationPackageInput = {
   requiredSkills: string[];
   preferredSkills: string[];
   responsibilities: string[];
+  applicationQuestions: ApplicationQuestion[];
   selectedMemoryIds: string[];
 };
 
@@ -32,6 +36,7 @@ export type NormalizedApplicationPackageInput = {
   required_skills: string[];
   preferred_skills: string[];
   responsibilities: string[];
+  application_questions: ApplicationQuestion[];
   selected_memory_ids: string[];
 };
 
@@ -84,6 +89,16 @@ export function normalizeApplicationPackageInput(
     required_skills: normalizeList(input.requiredSkills),
     preferred_skills: normalizeList(input.preferredSkills),
     responsibilities: normalizeList(input.responsibilities),
+    application_questions: input.applicationQuestions.map((question) => ({
+      question_id: question.question_id.trim(),
+      question_text: question.question_text.trim(),
+      required: question.required,
+      maximum_length: question.maximum_length ?? null,
+      response_type: nullableText(question.response_type),
+      relevant_target_requirement_ids: normalizeIdentifiers(
+        question.relevant_target_requirement_ids ?? [],
+      ),
+    })),
     selected_memory_ids: input.selectedMemoryIds.map((id) => id.trim()),
   };
 }
@@ -129,6 +144,7 @@ export function applicationPackageVersionInput(
     requiredSkills: stringList(target.required_skills),
     preferredSkills: stringList(target.preferred_skills),
     responsibilities: stringList(target.responsibilities),
+    applicationQuestions: applicationQuestionList(target.application_questions),
     selectedMemoryIds: [...version.selected_memory_ids],
   };
 }
@@ -150,6 +166,46 @@ export function moveSelectedMemory(
   const next = [...ids];
   [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
   return next;
+}
+
+export function defaultRecommendedMemoryIds(
+  memories: ApplicationPackageMemoryOption[],
+  maximum = 4,
+): string[] {
+  const recommended = memories
+    .filter((memory) => memory.recommended === true)
+    .sort(
+      (left, right) =>
+        (left.recommendation_rank ?? Number.MAX_SAFE_INTEGER) -
+          (right.recommendation_rank ?? Number.MAX_SAFE_INTEGER) ||
+        left.title.localeCompare(right.title),
+    )
+    .slice(0, maximum);
+  return recommended.length >= 2
+    ? recommended.map((memory) => memory.id)
+    : [];
+}
+
+export function applicationProviderLabel(
+  metadata: ApplicationProviderMetadata | null | undefined,
+): string {
+  const modelLabel = (model: string | null | undefined): string => {
+    if (model === "gpt-5.6-terra") return "GPT-5.6 Terra";
+    if (model === "gpt-5.6-sol") return "GPT-5.6 Sol";
+    return model ?? "OpenAI";
+  };
+  if (!metadata?.provider) return "Generation details unavailable";
+  if (metadata.provider === "local-deterministic") return "Local deterministic";
+  if (metadata.provider === "openai") {
+    if (metadata.review_pass_ran && metadata.review_model) {
+      return `${modelLabel(metadata.model)} + ${modelLabel(metadata.review_model)} review`;
+    }
+    if (metadata.model === "gpt-5.6-terra") return modelLabel(metadata.model);
+    return metadata.model ? `OpenAI · ${metadata.model}` : "OpenAI";
+  }
+  return metadata.model
+    ? `${metadata.provider} · ${metadata.model}`
+    : metadata.provider.replaceAll("-", " ");
 }
 
 export function resumeApplicationClaimId(
@@ -239,6 +295,18 @@ function normalizeList(values: string[]): string[] {
   return result;
 }
 
+function normalizeIdentifiers(values: string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = value.trim();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+  }
+  return result;
+}
+
 function nullableText(value: string | null | undefined): string | null {
   const rendered = value?.trim() ?? "";
   return rendered || null;
@@ -254,4 +322,27 @@ function stringOrNull(value: unknown): string | null {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function applicationQuestionList(value: unknown): ApplicationQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const question = item as Record<string, unknown>;
+    const maximumLength = question.maximum_length;
+    return [{
+      question_id: stringValue(question.question_id),
+      question_text: stringValue(question.question_text),
+      required:
+        typeof question.required === "boolean" ? question.required : true,
+      maximum_length:
+        typeof maximumLength === "number" && Number.isFinite(maximumLength)
+          ? maximumLength
+          : null,
+      response_type: stringOrNull(question.response_type),
+      relevant_target_requirement_ids: stringList(
+        question.relevant_target_requirement_ids,
+      ),
+    }];
+  });
 }

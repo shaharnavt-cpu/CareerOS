@@ -48,6 +48,9 @@ class ApplicationPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     responsibilities: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+    application_questions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     selected_memory_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )
@@ -109,5 +112,17 @@ class ApplicationPackageVersion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         JSONB, nullable=False
     )
     user_edits_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    writing_intelligence_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    quality_review_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    provider_metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    validation_summary_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     generator_version: Mapped[str] = mapped_column(Text, nullable=False)
     generation_reason: Mapped[str] = mapped_column(Text, nullable=False)

@@ -14,14 +14,19 @@ import {
   updateApplicationPackage,
   updateApplicationPackageOutputs,
   type ApplicationEvidenceTrace,
+  type ApplicationEvidenceGroup,
   type ApplicationPackage,
   type ApplicationPackageListItem,
   type ApplicationPackageMemoryOption,
   type ApplicationPackageOutputs,
   type ApplicationPackageOutputsUpdateInput,
+  type ApplicationQuestion,
   type ApplicationPackageStatus,
   type ApplicationPackageVersion,
+  type ApplicationQualityReview,
+  type ApplicationRequirementCoverage,
   type ApplicationSnippet,
+  type ApplicationWarningGroups,
   type CoverLetterDraft,
   type PositioningSummary,
   type ResumeBulletGroup,
@@ -30,11 +35,13 @@ import {
   applicationEvidenceSourceLabel,
   applicationEvidenceSupportLabel,
   applicationGenerationReasonLabel,
+  applicationProviderLabel,
   applicationPackageCopyText,
   applicationPackageInputFingerprint,
   applicationPackageStatusLabel,
   applicationPackageVersionInput,
   applicationWarningSeverityLabel,
+  defaultRecommendedMemoryIds,
   moveSelectedMemory,
   normalizeApplicationPackageInput,
   packageMatchesInput,
@@ -62,6 +69,7 @@ type TargetForm = {
   requiredSkills: string;
   preferredSkills: string;
   responsibilities: string;
+  applicationQuestions: ApplicationQuestion[];
 };
 
 type EditableOutputs = {
@@ -81,6 +89,7 @@ const emptyTarget: TargetForm = {
   requiredSkills: "",
   preferredSkills: "",
   responsibilities: "",
+  applicationQuestions: [],
 };
 
 export function ApplicationPackageWorkspace() {
@@ -100,6 +109,7 @@ export function ApplicationPackageWorkspace() {
   const busyActionRef = useRef<string | null>("loading");
   const [memoryLoading, setMemoryLoading] = useState(false);
   const memoryRequestRef = useRef(0);
+  const freshSelectionRef = useRef(true);
   const [reviewDirty, setReviewDirty] = useState(false);
   const [notice, setNotice] = useState(
     "Choose a target and explicitly select approved Career Memory. CareerOS will not turn job-posting language into facts.",
@@ -144,6 +154,13 @@ export function ApplicationPackageWorkspace() {
       if (cancelled) return;
       if (memoryResult.status === "fulfilled") {
         setMemories(memoryResult.value);
+        if (
+          packageResult.status === "fulfilled" &&
+          packageResult.value.length === 0 &&
+          freshSelectionRef.current
+        ) {
+          setSelectedMemoryIds(defaultRecommendedMemoryIds(memoryResult.value));
+        }
       }
       if (opportunityResult.status === "fulfilled") {
         setOpportunities(opportunityResult.value);
@@ -189,6 +206,7 @@ export function ApplicationPackageWorkspace() {
   }, []);
 
   function hydrateFromPackage(applicationPackage: ApplicationPackage) {
+    freshSelectionRef.current = false;
     setForm({
       opportunityId: applicationPackage.opportunity_id ?? "",
       roleTitle: applicationPackage.role_title,
@@ -199,6 +217,9 @@ export function ApplicationPackageWorkspace() {
       requiredSkills: applicationPackage.required_skills.join("\n"),
       preferredSkills: applicationPackage.preferred_skills.join("\n"),
       responsibilities: applicationPackage.responsibilities.join("\n"),
+      applicationQuestions: structuredClone(
+        applicationPackage.application_questions,
+      ),
     });
     setSelectedMemoryIds(applicationPackage.selected_memory_ids);
     setActivePackage(applicationPackage);
@@ -252,6 +273,13 @@ export function ApplicationPackageWorkspace() {
   ) {
     if (busyActionRef.current !== null || memoryLoading) return;
     if (blockDirtyChange()) return;
+    if (
+      key === "roleTitle" &&
+      freshSelectionRef.current &&
+      !activePackage
+    ) {
+      setSelectedMemoryIds([]);
+    }
     setForm((current) => ({ ...current, [key]: value }));
     invalidate();
   }
@@ -259,6 +287,7 @@ export function ApplicationPackageWorkspace() {
   function updateSelection(next: string[]) {
     if (busyActionRef.current !== null || memoryLoading) return;
     if (blockDirtyChange()) return;
+    freshSelectionRef.current = false;
     setSelectedMemoryIds(next);
     invalidate(
       "Selected proof or its order changed—generate a new package. CareerOS will keep every project boundary explicit.",
@@ -266,6 +295,12 @@ export function ApplicationPackageWorkspace() {
   }
 
   function toggleMemory(memoryId: string) {
+    if (!selectedMemoryIds.includes(memoryId) && selectedMemoryIds.length >= 4) {
+      setNotice(
+        "A focused draft can use at most four selected memories. Remove one before adding another.",
+      );
+      return;
+    }
     updateSelection(
       selectedMemoryIds.includes(memoryId)
         ? selectedMemoryIds.filter((id) => id !== memoryId)
@@ -280,9 +315,16 @@ export function ApplicationPackageWorkspace() {
       const options = await listEligibleApplicationPackageMemories(targetRole);
       if (requestId !== memoryRequestRef.current) return;
       setMemories(options);
+      let appliedDefaults = false;
+      if (!activePackage && freshSelectionRef.current) {
+        setSelectedMemoryIds(defaultRecommendedMemoryIds(options));
+        appliedDefaults = true;
+      }
       setNotice(
         targetRole.trim()
-          ? "Updated role-aware proof recommendations. Your explicit selection and order did not change."
+          ? appliedDefaults
+            ? "Updated role-aware recommendations and selected the strongest focused set. Review the order before generating."
+            : "Updated role-aware proof recommendations. Your explicit selection and order did not change."
           : "Updated the approved-memory list. Select and order the proof you want to use.",
       );
     } catch (error) {
@@ -306,7 +348,10 @@ export function ApplicationPackageWorkspace() {
     if (!beginBusyAction(action)) return;
     try {
       const opportunity = await getApplicationOpportunity(opportunityId);
-      const next = targetFromOpportunity(opportunity);
+      const next = targetFromOpportunity(
+        opportunity,
+        form.applicationQuestions,
+      );
       setForm(next);
       invalidate(
         "Linked opportunity loaded. Review the detected target fields, then generate a new package from your explicitly selected proof.",
@@ -346,8 +391,10 @@ export function ApplicationPackageWorkspace() {
   function startNewPackage() {
     if (busyActionRef.current !== null || memoryLoading || blockDirtyChange()) return;
     setForm(emptyTarget);
+    freshSelectionRef.current = true;
     setSelectedMemoryIds([]);
     setActivePackage(null);
+    void refreshMemories("");
     setNotice(
       "New package started. Enter a target and explicitly choose an input order; target relevance still determines final emphasis.",
     );
@@ -385,6 +432,28 @@ export function ApplicationPackageWorkspace() {
       );
       return;
     }
+    const incompleteQuestionIndex = currentInput.applicationQuestions.findIndex(
+      (question) => !question.question_text.trim(),
+    );
+    if (incompleteQuestionIndex >= 0) {
+      setNotice(
+        `Enter question ${incompleteQuestionIndex + 1} or remove it before generating. Zero supplied questions is valid.`,
+      );
+      return;
+    }
+    const invalidLengthIndex = currentInput.applicationQuestions.findIndex(
+      (question) =>
+        question.maximum_length != null &&
+        (!Number.isInteger(question.maximum_length) ||
+          question.maximum_length < 20 ||
+          question.maximum_length > 12_000),
+    );
+    if (invalidLengthIndex >= 0) {
+      setNotice(
+        `Question ${invalidLengthIndex + 1} needs a maximum length between 20 and 12,000 characters.`,
+      );
+      return;
+    }
     if (reviewDirty) {
       blockDirtyChange();
       return;
@@ -409,6 +478,7 @@ export function ApplicationPackageWorkspace() {
           required_skills: normalized.required_skills,
           preferred_skills: normalized.preferred_skills,
           responsibilities: normalized.responsibilities,
+          application_questions: normalized.application_questions,
           selected_memory_ids: normalized.selected_memory_ids,
         });
         setActivePackage(updated);
@@ -423,6 +493,7 @@ export function ApplicationPackageWorkspace() {
           required_skills: normalized.required_skills,
           preferred_skills: normalized.preferred_skills,
           responsibilities: normalized.responsibilities,
+          application_questions: normalized.application_questions,
           selected_memory_ids: normalized.selected_memory_ids,
         });
         packageId = created.package_id;
@@ -430,6 +501,7 @@ export function ApplicationPackageWorkspace() {
       }
       const generated = await generateApplicationPackage(packageId, {
         selected_memory_ids: normalized.selected_memory_ids,
+        application_questions: normalized.application_questions,
       });
       setActivePackage(generated);
       await refreshSavedPackages();
@@ -457,9 +529,13 @@ export function ApplicationPackageWorkspace() {
     const action = "regenerate";
     if (!beginBusyAction(action)) return;
     try {
+      const normalized = normalizeApplicationPackageInput(currentInput);
       const generated = await regenerateApplicationPackage(
         applicationPackage.package_id,
-        { selected_memory_ids: currentInput.selectedMemoryIds },
+        {
+          selected_memory_ids: normalized.selected_memory_ids,
+          application_questions: normalized.application_questions,
+        },
       );
       setActivePackage(generated);
       await refreshSavedPackages();
@@ -621,6 +697,7 @@ export function ApplicationPackageWorkspace() {
                 applicationPackage={activePackage}
                 busy={busy}
                 onRestoreInputs={() => restoreVersionInputs(activePackage)}
+                onStatus={changeStatus}
               />
             ) : visiblePackage ? (
               <PackageReview
@@ -790,6 +867,11 @@ function TargetPanel({
         placeholder="One per line, or comma-separated"
         value={form.responsibilities}
       />
+      <ApplicationQuestionsEditor
+        disabled={inputLocked}
+        onChange={(questions) => onUpdate("applicationQuestions", questions)}
+        questions={form.applicationQuestions}
+      />
 
       <button
         className="mt-5 w-full rounded-full bg-[#173f35] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#285b4a] disabled:cursor-not-allowed disabled:opacity-45"
@@ -876,6 +958,251 @@ function LabeledTextarea({
   );
 }
 
+function ApplicationQuestionsEditor({
+  disabled,
+  onChange,
+  questions,
+}: {
+  disabled: boolean;
+  onChange: (questions: ApplicationQuestion[]) => void;
+  questions: ApplicationQuestion[];
+}) {
+  function updateQuestion(
+    questionId: string,
+    update: Partial<ApplicationQuestion>,
+  ) {
+    onChange(
+      questions.map((question) =>
+        question.question_id === questionId
+          ? { ...question, ...update }
+          : question,
+      ),
+    );
+  }
+
+  return (
+    <div className="mt-5 border-t border-[#e0e7e3] pt-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-[#526a60]">
+            Application questions
+          </p>
+          <p className="mt-1 text-[11px] leading-5 text-[#75867f]">
+            Add only the questions the application actually asks. Zero questions
+            produces zero answers.
+          </p>
+        </div>
+        <button
+          className="shrink-0 rounded-full border border-[#c7d8cf] px-3 py-1.5 text-[10px] font-bold text-[#35634f] disabled:opacity-45"
+          disabled={disabled || questions.length >= 50}
+          onClick={() => onChange([...questions, newApplicationQuestion()])}
+          type="button"
+        >
+          Add question
+        </button>
+      </div>
+
+      {questions.length ? (
+        <div className="mt-4 space-y-3">
+          {questions.map((question, index) => (
+            <article
+              className="rounded-2xl border border-[#dbe5df] bg-[#f8faf8] p-3"
+              key={question.question_id}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#557566]">
+                    Question {index + 1}
+                  </p>
+                  <p className="mt-1 break-all text-[10px] text-[#829089]">
+                    Stable ID: {question.question_id}
+                  </p>
+                </div>
+                <button
+                  className="rounded-lg border border-[#e0d6ca] px-2 py-1 text-[10px] font-semibold text-[#80684d] disabled:opacity-45"
+                  disabled={disabled}
+                  onClick={() =>
+                    onChange(
+                      questions.filter(
+                        (item) => item.question_id !== question.question_id,
+                      ),
+                    )
+                  }
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
+
+              <label
+                className="mt-3 block text-[11px] font-semibold text-[#526a60]"
+                htmlFor={`application-question-${question.question_id}`}
+              >
+                Question text <span className="text-[#a66e24]">*</span>
+              </label>
+              <textarea
+                className="mt-1.5 min-h-24 w-full resize-y rounded-xl border border-[#cfdbd4] bg-white px-3 py-2.5 text-sm leading-5 text-[#344e44] outline-none ring-[#dceee5] focus:ring-4 disabled:opacity-60"
+                disabled={disabled}
+                id={`application-question-${question.question_id}`}
+                onChange={(event) =>
+                  updateQuestion(question.question_id, {
+                    question_text: event.target.value,
+                  })
+                }
+                placeholder="Paste the application question exactly as asked."
+                value={question.question_text}
+              />
+
+              <label className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-[#526a60]">
+                <input
+                  checked={question.required}
+                  className="h-4 w-4 accent-[#173f35]"
+                  disabled={disabled}
+                  onChange={(event) =>
+                    updateQuestion(question.question_id, {
+                      required: event.target.checked,
+                    })
+                  }
+                  type="checkbox"
+                />
+                Required answer
+              </label>
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                <label className="text-[11px] font-semibold text-[#526a60]">
+                  Maximum length (optional)
+                  <input
+                    className="mt-1.5 w-full rounded-xl border border-[#cfdbd4] bg-white px-3 py-2 text-sm text-[#344e44] outline-none ring-[#dceee5] focus:ring-4 disabled:opacity-60"
+                    disabled={disabled}
+                    max={12_000}
+                    min={20}
+                    onChange={(event) => {
+                      const value = Number.parseInt(event.target.value, 10);
+                      updateQuestion(question.question_id, {
+                        maximum_length: Number.isNaN(value) ? null : value,
+                      });
+                    }}
+                    placeholder="Characters"
+                    type="number"
+                    value={question.maximum_length ?? ""}
+                  />
+                </label>
+                <label className="text-[11px] font-semibold text-[#526a60]">
+                  Response type (optional)
+                  <input
+                    className="mt-1.5 w-full rounded-xl border border-[#cfdbd4] bg-white px-3 py-2 text-sm text-[#344e44] outline-none ring-[#dceee5] focus:ring-4 disabled:opacity-60"
+                    disabled={disabled}
+                    maxLength={100}
+                    onChange={(event) =>
+                      updateQuestion(question.question_id, {
+                        response_type: event.target.value || null,
+                      })
+                    }
+                    placeholder="Short text, paragraph…"
+                    value={question.response_type ?? ""}
+                  />
+                </label>
+              </div>
+
+              <RequirementIdEditor
+                disabled={disabled}
+                ids={question.relevant_target_requirement_ids ?? []}
+                onChange={(ids) =>
+                  updateQuestion(question.question_id, {
+                    relevant_target_requirement_ids: ids,
+                  })
+                }
+                questionId={question.question_id}
+              />
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 rounded-xl border border-dashed border-[#d7e0db] p-3 text-xs leading-5 text-[#71817b]">
+          No application questions supplied. Generation will return no application
+          answers.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RequirementIdEditor({
+  disabled,
+  ids,
+  onChange,
+  questionId,
+}: {
+  disabled: boolean;
+  ids: string[];
+  onChange: (ids: string[]) => void;
+  questionId: string;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function addId() {
+    const value = draft.trim();
+    if (!value || ids.includes(value)) return;
+    onChange([...ids, value]);
+    setDraft("");
+  }
+
+  return (
+    <div className="mt-3">
+      <label
+        className="text-[11px] font-semibold text-[#526a60]"
+        htmlFor={`application-question-requirement-${questionId}`}
+      >
+        Relevant target requirement IDs (optional)
+      </label>
+      {ids.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {ids.map((id) => (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-[#e8f1ec] px-2.5 py-1 text-[10px] font-semibold text-[#486b5b]"
+              key={id}
+            >
+              {id}
+              <button
+                aria-label={`Remove requirement ${id}`}
+                disabled={disabled}
+                onClick={() => onChange(ids.filter((item) => item !== id))}
+                type="button"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-2 flex gap-2">
+        <input
+          className="min-w-0 flex-1 rounded-xl border border-[#cfdbd4] bg-white px-3 py-2 text-xs text-[#344e44] outline-none ring-[#dceee5] focus:ring-4 disabled:opacity-60"
+          disabled={disabled}
+          id={`application-question-requirement-${questionId}`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addId();
+            }
+          }}
+          placeholder="Requirement ID"
+          value={draft}
+        />
+        <button
+          className="rounded-xl border border-[#c7d8cf] px-3 py-2 text-[10px] font-bold text-[#35634f] disabled:opacity-45"
+          disabled={disabled || !draft.trim() || ids.includes(draft.trim())}
+          onClick={addId}
+          type="button"
+        >
+          Add ID
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MemorySelectionPanel({
   disabled,
   loading,
@@ -894,6 +1221,17 @@ function MemorySelectionPanel({
   selectedIds: string[];
 }) {
   const memoryById = new Map(memories.map((memory) => [memory.id, memory]));
+  const selectedSet = new Set(selectedIds);
+  const recommended = memories
+    .filter((memory) => memory.recommended === true && !selectedSet.has(memory.id))
+    .sort(
+      (left, right) =>
+        (left.recommendation_rank ?? Number.MAX_SAFE_INTEGER) -
+        (right.recommendation_rank ?? Number.MAX_SAFE_INTEGER),
+    );
+  const otherEligible = memories.filter(
+    (memory) => memory.recommended !== true && !selectedSet.has(memory.id),
+  );
   return (
     <section className="rounded-[28px] border border-[#dce4df] bg-white p-5">
       <div className="flex items-start justify-between gap-3">
@@ -919,12 +1257,11 @@ function MemorySelectionPanel({
         and their exact input order is preserved in every version.
       </p>
 
-      {selectedIds.length > 0 && (
-        <div className="mt-4 rounded-2xl border border-[#bcd5c8] bg-[#edf6f0] p-3">
+      <div className="mt-4 rounded-2xl border border-[#bcd5c8] bg-[#edf6f0] p-3">
           <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#3f715b]">
-            Selected input order
+            Selected memories · input order
           </p>
-          <ol className="mt-2 space-y-2">
+          {selectedIds.length > 0 ? <ol className="mt-2 space-y-2">
             {selectedIds.map((memoryId, index) => {
               const memory = memoryById.get(memoryId);
               return (
@@ -968,13 +1305,68 @@ function MemorySelectionPanel({
                 </li>
               );
             })}
-          </ol>
-        </div>
-      )}
+          </ol> : <p className="mt-2 text-xs leading-5 text-[#64796f]">
+            No memories selected. Choose 2–4 recommendations for a focused draft.
+          </p>}
+      </div>
 
-      <div className="mt-4 max-h-[520px] space-y-2 overflow-y-auto pr-1">
+      <div className="mt-4 max-h-[520px] space-y-4 overflow-y-auto pr-1">
         {memories.length ? (
-          memories.map((memory, index) => {
+          <>
+            <MemoryOptionList
+              disabled={disabled}
+              emptyLabel="All recommended memories are already selected."
+              label="Recommended for this target"
+              memories={recommended}
+              onToggle={onToggle}
+              recommended
+              selectedIds={selectedIds}
+            />
+            <MemoryOptionList
+              disabled={disabled}
+              emptyLabel="No additional eligible memories are available."
+              label="Other eligible memories"
+              memories={otherEligible}
+              onToggle={onToggle}
+              selectedIds={selectedIds}
+            />
+          </>
+        ) : (
+          <p className="rounded-2xl border border-dashed border-[#d4ddd8] p-4 text-xs leading-5 text-[#71817b]">
+            No eligible approved memories are available yet. Approve Career Memory
+            or retry after the API is running.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MemoryOptionList({
+  disabled,
+  emptyLabel,
+  label,
+  memories,
+  onToggle,
+  recommended = false,
+  selectedIds,
+}: {
+  disabled: boolean;
+  emptyLabel: string;
+  label: string;
+  memories: ApplicationPackageMemoryOption[];
+  onToggle: (memoryId: string) => void;
+  recommended?: boolean;
+  selectedIds: string[];
+}) {
+  return (
+    <section>
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[#657c71]">
+        {label}
+      </p>
+      {memories.length ? (
+        <div className="space-y-2">
+          {memories.map((memory, index) => {
             const checked = selectedIds.includes(memory.id);
             return (
               <label
@@ -998,9 +1390,11 @@ function MemorySelectionPanel({
                       <span className="text-sm font-semibold leading-5 text-[#29483e]">
                         {memory.title}
                       </span>
-                      <span className="rounded-full bg-[#e9efeb] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#6a7b74]">
-                        Recommended {index + 1}
-                      </span>
+                      {recommended && (
+                        <span className="rounded-full bg-[#e9efeb] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#3f715b]">
+                          Recommended {memory.recommendation_rank ?? index + 1}
+                        </span>
+                      )}
                     </span>
                     {memory.target_reason && (
                       <span className="mt-1 block text-xs leading-5 text-[#4d6e60]">
@@ -1021,14 +1415,13 @@ function MemorySelectionPanel({
                 </span>
               </label>
             );
-          })
-        ) : (
-          <p className="rounded-2xl border border-dashed border-[#d4ddd8] p-4 text-xs leading-5 text-[#71817b]">
-            No eligible approved memories are available yet. Approve Career Memory
-            or retry after the API is running.
-          </p>
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        <p className="rounded-xl border border-dashed border-[#d9e2dd] p-3 text-xs leading-5 text-[#71817b]">
+          {emptyLabel}
+        </p>
+      )}
     </section>
   );
 }
@@ -1120,11 +1513,16 @@ function StalePackagePanel({
   applicationPackage,
   busy,
   onRestoreInputs,
+  onStatus,
 }: {
   approvedMemoryChanged: boolean;
   applicationPackage: ApplicationPackage;
   busy: boolean;
   onRestoreInputs: () => void;
+  onStatus: (
+    applicationPackage: ApplicationPackage,
+    status: ApplicationPackageStatus,
+  ) => Promise<void>;
 }) {
   return (
     <section className="rounded-[30px] border border-[#dfbd7b] bg-[#fff9ed] p-6 sm:p-8">
@@ -1151,6 +1549,25 @@ function StalePackagePanel({
             type="button"
           >
             Restore saved target inputs
+          </button>
+        )}
+        {applicationPackage.status !== "ARCHIVED" ? (
+          <button
+            className="rounded-full border border-[#d8bd8b] bg-white px-4 py-2 text-xs font-semibold text-[#76541f]"
+            disabled={busy}
+            onClick={() => void onStatus(applicationPackage, "ARCHIVED")}
+            type="button"
+          >
+            Archive package
+          </button>
+        ) : (
+          <button
+            className="rounded-full border border-[#d8bd8b] bg-white px-4 py-2 text-xs font-semibold text-[#76541f]"
+            disabled={busy}
+            onClick={() => void onStatus(applicationPackage, "DRAFT")}
+            type="button"
+          >
+            Restore draft
           </button>
         )}
         <span className="rounded-full border border-[#e0c999] px-4 py-2 text-xs font-semibold text-[#80612e]">
@@ -1377,13 +1794,17 @@ function PackageReview({
     }));
   }
 
-  function updateSnippet(index: number, value: string) {
+  function updateSnippet(questionId: string, index: number, value: string) {
     onDirtyChange(true);
     setEditor((current) => ({
       ...current,
       application_snippets: current.application_snippets.map(
         (snippet, currentIndex) =>
-          currentIndex === index ? { ...snippet, text: value } : snippet,
+          (questionId
+            ? snippet.question_id === questionId
+            : currentIndex === index)
+            ? { ...snippet, text: value }
+            : snippet,
       ),
     }));
   }
@@ -1402,9 +1823,19 @@ function PackageReview({
               <span className="rounded-full bg-[#f2eef9] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#68558d]">
                 Draft from approved memory
               </span>
+              {version.provider_metadata && (
+                <span className="rounded-full bg-[#edf4fb] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#46667f]">
+                  {applicationProviderLabel(version.provider_metadata)}
+                </span>
+              )}
               {hasUserReviewClaims && (
                 <span className="rounded-full bg-[#fff0d6] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#8a5e22]">
                   User review required
+                </span>
+              )}
+              {version.validation_summary?.status === "BLOCKED" && (
+                <span className="rounded-full bg-[#fff0d6] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#8a5e22]">
+                  Validation blocked
                 </span>
               )}
             </div>
@@ -1454,7 +1885,14 @@ function PackageReview({
               applicationPackage.status !== "ARCHIVED" && (
                 <button
                   className="rounded-full border border-[#a9c9b9] px-4 py-2 text-xs font-semibold text-[#35634f] disabled:opacity-45"
-                  disabled={busy || dirty}
+                  disabled={
+                    busy ||
+                    dirty ||
+                    Boolean(
+                      version.validation_summary &&
+                        version.validation_summary.status !== "PASS",
+                    )
+                  }
                   onClick={() => void onStatus(applicationPackage, "READY")}
                   type="button"
                 >
@@ -1494,6 +1932,10 @@ function PackageReview({
           memories={memories}
           resumeGroups={original.resume_bullets}
         />
+        <ProviderMetadataCard
+          generationReason={version.generation_reason}
+          metadata={version.provider_metadata}
+        />
       </section>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
@@ -1503,7 +1945,19 @@ function PackageReview({
           onChange={updatePositioning}
           reviewRequiredClaimIds={reviewRequiredClaimIds}
         />
-        <WarningsCard applicationPackage={applicationPackage} />
+        <WarningsCard
+          applicationPackage={applicationPackage}
+          warningGroups={applicationPackage.warning_groups}
+        />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <RequirementCoverageCard
+          coverage={version.requirement_coverage ?? applicationPackage.requirement_coverage}
+        />
+        <WritingQualityCard
+          qualityReview={version.quality_review ?? applicationPackage.quality_review}
+        />
       </div>
 
       <ResumeBulletsCard
@@ -1529,6 +1983,7 @@ function PackageReview({
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
         <EvidenceTraceCard
+          evidenceGroups={applicationPackage.evidence_groups}
           evidenceTrace={applicationPackage.evidence_trace}
           hasUserReviewClaims={hasUserReviewClaims || dirty}
           outcomeSignalCount={applicationPackage.outcome_signal_ids_used.length}
@@ -1588,6 +2043,144 @@ function SelectedProofStrip({
         ))}
       </ol>
     </div>
+  );
+}
+
+function ProviderMetadataCard({
+  generationReason,
+  metadata,
+}: {
+  generationReason: ApplicationPackageVersion["generation_reason"];
+  metadata: ApplicationPackageVersion["provider_metadata"];
+}) {
+  if (!metadata) return null;
+  const usage = [
+    metadata.input_tokens != null ? `${metadata.input_tokens} input tokens` : null,
+    metadata.cached_input_tokens != null
+      ? `${metadata.cached_input_tokens} cached`
+      : null,
+    metadata.output_tokens != null ? `${metadata.output_tokens} output tokens` : null,
+    metadata.latency_ms != null ? `${metadata.latency_ms} ms` : null,
+  ].filter((value): value is string => Boolean(value));
+  return (
+    <div className="mt-4 rounded-2xl border border-[#d6e3ef] bg-[#f5f9fc] p-4 text-xs leading-5 text-[#4d6578]">
+      <span className="font-semibold">
+        {generationReason === "USER_EDIT"
+          ? "Source generation provider:"
+          : "Provider and model:"}
+      </span>{" "}
+      {applicationProviderLabel(metadata)}
+      {usage.length > 0 && <span className="block mt-1 text-[#718496]">{usage.join(" · ")}</span>}
+    </div>
+  );
+}
+
+function RequirementCoverageCard({
+  coverage,
+}: {
+  coverage: ApplicationRequirementCoverage | null | undefined;
+}) {
+  const groups: Array<{
+    label: string;
+    values: NonNullable<ApplicationRequirementCoverage["strongly_supported"]>;
+    tone: string;
+  }> = [
+    {
+      label: "Strong support",
+      values: coverage?.strongly_supported ?? [],
+      tone: "border-[#b8d8c7] bg-[#eff8f2] text-[#35634f]",
+    },
+    {
+      label: "Partial support",
+      values: coverage?.partially_supported ?? [],
+      tone: "border-[#e6cf9d] bg-[#fff9ed] text-[#76541f]",
+    },
+    {
+      label: "Missing proof",
+      values: coverage?.unsupported ?? [],
+      tone: "border-[#e1b9ae] bg-[#fff5f2] text-[#824e42]",
+    },
+    {
+      label: "Not relevant enough",
+      values: coverage?.not_relevant_enough ?? coverage?.not_relevant ?? [],
+      tone: "border-[#d9ddda] bg-[#f5f6f4] text-[#65716c]",
+    },
+  ];
+  if (!coverage) return null;
+  return (
+    <section className="rounded-[28px] border border-[#dce4df] bg-white p-5 sm:p-7">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#3f8064]">
+        Requirement coverage
+      </p>
+      <h3 className="mt-1 text-xl font-semibold text-[#17362d]">
+        What the selected proof can support
+      </h3>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {groups.map((group) => (
+          <div className={`rounded-2xl border p-3 ${group.tone}`} key={group.label}>
+            <p className="text-[10px] font-bold uppercase tracking-[0.1em]">{group.label}</p>
+            {group.values.length ? (
+              <ul className="mt-2 space-y-2">
+                {group.values.map((item) => (
+                  <li className="text-xs leading-5" key={item.requirement}>
+                    <span className="font-semibold">{item.requirement}</span>
+                    {item.evidence?.length ? (
+                      <span className="block opacity-85">{item.evidence.join(" · ")}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs leading-5 opacity-75">None listed.</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WritingQualityCard({
+  qualityReview,
+}: {
+  qualityReview: ApplicationQualityReview | null | undefined;
+}) {
+  if (!qualityReview) return null;
+  const checks: Array<[string, string | undefined]> = [
+    ["Evidence", qualityReview.evidence_support],
+    ["Role fit", qualityReview.role_relevance],
+    ["Specificity", qualityReview.specificity],
+    ["Naturalness", qualityReview.naturalness],
+    ["Conciseness", qualityReview.concision],
+    ["Recruiter readability", qualityReview.recruiter_readability],
+    ["Genericness", qualityReview.genericness],
+    ["Repetition", qualityReview.repetition],
+    ["Overclaim risk", qualityReview.overclaim_risk],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  return (
+    <section className="rounded-[28px] border border-[#d6e3ef] bg-[#f8fbfd] p-5 sm:p-7">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#52718f]">
+        Writing-quality review
+      </p>
+      <h3 className="mt-1 text-xl font-semibold text-[#29465e]">
+        Concise recruiter-facing check
+      </h3>
+      {qualityReview.primary_issue && (
+        <p className="mt-3 rounded-xl border border-[#d9e3ec] bg-white p-3 text-sm leading-6 text-[#4d6578]">
+          <span className="font-semibold">Primary issue:</span>{" "}
+          {qualityReview.primary_issue}
+        </p>
+      )}
+      <dl className="mt-4 grid gap-x-4 gap-y-3 sm:grid-cols-2">
+        {checks.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#688096]">{label}</dt>
+            <dd className="mt-1 text-xs leading-5 text-[#4d6578]">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {qualityReview.notes?.length ? <SummaryList label="Review notes" values={qualityReview.notes} /> : null}
+    </section>
   );
 }
 
@@ -1689,14 +2282,40 @@ function SummaryList({
 
 function WarningsCard({
   applicationPackage,
+  warningGroups,
 }: {
   applicationPackage: ApplicationPackage;
+  warningGroups: ApplicationWarningGroups | undefined;
 }) {
   const doNotClaim = applicationPackage.positioning_summary?.do_not_claim ?? [];
+  const groupedWarnings = [
+    ...(warningGroups?.partially_supported ?? []),
+    ...(warningGroups?.unsupported ?? []),
+    ...(warningGroups?.missing_proof ?? []),
+  ];
+  const groupedWarningKeys = new Set(
+    groupedWarnings.map(
+      (warning) =>
+        `${warning.code}:${warning.requirement ?? ""}:${warning.message}`,
+    ),
+  );
+  const ungroupedWarnings = applicationPackage.warnings.filter(
+    (warning) =>
+      !groupedWarningKeys.has(
+        `${warning.code}:${warning.requirement ?? ""}:${warning.message}`,
+      ),
+  );
+  const hasGroupedWarnings = groupedWarnings.length > 0;
   const hasWarnings =
     applicationPackage.warnings.length > 0 ||
     applicationPackage.unsupported_claims.length > 0 ||
-    doNotClaim.length > 0;
+    doNotClaim.length > 0 ||
+    Boolean(
+      warningGroups?.strongly_supported?.length ||
+        warningGroups?.partially_supported?.length ||
+        warningGroups?.unsupported?.length ||
+        warningGroups?.missing_proof?.length,
+    );
   return (
     <section className="rounded-[28px] border border-[#e2cfaa] bg-[#fff9ed] p-5 sm:p-7">
       <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#956b2d]">
@@ -1711,7 +2330,10 @@ function WarningsCard({
       </p>
       {hasWarnings ? (
         <div className="mt-4 space-y-3">
-          {applicationPackage.warnings.map((warning, index) => (
+          {warningGroups && (
+            <GroupedWarnings warningGroups={warningGroups} />
+          )}
+          {ungroupedWarnings.map((warning, index) => (
             <article
               className={`rounded-2xl border p-4 ${
                 warning.severity === "BLOCKING"
@@ -1735,7 +2357,7 @@ function WarningsCard({
               </p>
             </article>
           ))}
-          {applicationPackage.unsupported_claims.map((claim) => (
+          {!hasGroupedWarnings && applicationPackage.unsupported_claims.map((claim) => (
             <div
               className="rounded-2xl border border-[#ead9b8] bg-white/75 p-4 text-sm leading-6 text-[#72562c]"
               key={claim}
@@ -1763,6 +2385,42 @@ function WarningsCard({
         </p>
       )}
     </section>
+  );
+}
+
+function GroupedWarnings({
+  warningGroups,
+}: {
+  warningGroups: ApplicationWarningGroups;
+}) {
+  const groups: Array<{
+    label: string;
+    warnings: ApplicationPackage["warnings"];
+  }> = [
+    { label: "Partially supported", warnings: warningGroups.partially_supported ?? [] },
+    { label: "Unsupported", warnings: warningGroups.unsupported ?? [] },
+    { label: "Missing proof", warnings: warningGroups.missing_proof ?? [] },
+  ];
+  return (
+    <>
+      {warningGroups.strongly_supported?.length ? (
+        <SummaryList label="Strongly supported" values={warningGroups.strongly_supported} />
+      ) : null}
+      {groups.map((group) =>
+        group.warnings.length ? (
+          <div className="rounded-2xl border border-[#ead9b8] bg-white/75 p-4" key={group.label}>
+            <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#8c682f]">{group.label}</p>
+            <ul className="mt-2 space-y-2">
+              {group.warnings.map((warning, index) => (
+                <li className="text-sm leading-6 text-[#72562c]" key={`${warning.code}:${index}`}>
+                  {warning.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null,
+      )}
+    </>
   );
 }
 
@@ -1984,7 +2642,7 @@ function ApplicationSnippetsCard({
   snippets,
 }: {
   dirtyClaimIds: ReadonlySet<string>;
-  onChange: (index: number, value: string) => void;
+  onChange: (questionId: string, index: number, value: string) => void;
   reviewRequiredClaimIds: ReadonlySet<string>;
   snippets: ApplicationSnippet[];
 }) {
@@ -1998,10 +2656,13 @@ function ApplicationSnippetsCard({
         Application answer snippets
       </p>
       <h3 className="mt-1 text-xl font-semibold text-[#17362d]">
-        {hasReviewRequiredSnippet
-          ? "Five reviewable starting points"
-          : "Five copy-ready starting points"}
+        {snippets.length === 0
+          ? "No supplied questions"
+          : hasReviewRequiredSnippet
+            ? `${snippets.length} reviewable ${snippets.length === 1 ? "answer" : "answers"}`
+            : `${snippets.length} copy-ready ${snippets.length === 1 ? "answer" : "answers"}`}
       </h3>
+      {snippets.length ? (
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
         {snippets.map((snippet, index) => {
           const claimId = snippetApplicationClaimId(index);
@@ -2010,7 +2671,7 @@ function ApplicationSnippetsCard({
           return (
           <article
             className="rounded-2xl border border-[#e0e7e3] bg-[#fbfcfa] p-4"
-            key={snippet.question}
+            key={snippet.question_id || `historical-answer-${index}`}
           >
             <div className="flex items-start justify-between gap-3">
               <h4 className="text-sm font-semibold leading-6 text-[#315145]">
@@ -2026,7 +2687,9 @@ function ApplicationSnippetsCard({
             <textarea
               aria-label={`${snippet.question} answer editor`}
               className="mt-3 min-h-44 w-full resize-y rounded-xl border border-[#cfdbd4] bg-white p-3 text-sm leading-6 text-[#344e44] outline-none ring-[#dceee5] focus:ring-4"
-              onChange={(event) => onChange(index, event.target.value)}
+              onChange={(event) =>
+                onChange(snippet.question_id, index, event.target.value)
+              }
               value={snippet.text}
             />
             {reviewRequired && <ClaimReviewCaveat dirty={dirty} />}
@@ -2041,15 +2704,23 @@ function ApplicationSnippetsCard({
           );
         })}
       </div>
+      ) : (
+        <p className="mt-5 rounded-2xl border border-dashed border-[#d4ddd8] bg-[#fbfcfa] p-4 text-sm leading-6 text-[#71817b]">
+          No application questions were supplied, so this package correctly
+          contains zero application answers.
+        </p>
+      )}
     </section>
   );
 }
 
 function EvidenceTraceCard({
+  evidenceGroups,
   evidenceTrace,
   hasUserReviewClaims,
   outcomeSignalCount,
 }: {
+  evidenceGroups: ApplicationEvidenceGroup[] | undefined;
   evidenceTrace: ApplicationEvidenceTrace[];
   hasUserReviewClaims: boolean;
   outcomeSignalCount: number;
@@ -2076,11 +2747,71 @@ function EvidenceTraceCard({
           only—not as proof of a skill, result, or causality.
         </div>
       )}
-      <EvidenceTraceList
-        preservedReference={hasUserReviewClaims}
-        traces={evidenceTrace}
-      />
+      {evidenceGroups?.length ? (
+        <>
+          <EvidenceGroups groups={evidenceGroups} />
+          <details className="mt-4 rounded-2xl border border-[#d9e5de] bg-[#f7faf7] p-4">
+            <summary className="cursor-pointer text-xs font-semibold text-[#46685a]">
+              Inspect full source-level trace ({evidenceTrace.length})
+            </summary>
+            <EvidenceTraceList
+              compact
+              preservedReference={hasUserReviewClaims}
+              traces={evidenceTrace}
+            />
+          </details>
+        </>
+      ) : (
+        <EvidenceTraceList
+          preservedReference={hasUserReviewClaims}
+          traces={evidenceTrace}
+        />
+      )}
     </section>
+  );
+}
+
+function EvidenceGroups({ groups }: { groups: ApplicationEvidenceGroup[] }) {
+  const memoryGroups = groups.filter((group) => group.memory_id).slice(0, 4);
+  const visibleGroups = memoryGroups.length ? memoryGroups : groups.slice(0, 4);
+  const labels: Array<[
+    "direct_proof" | "approved_enrichment" | "supported_framing" | "strategy_signals" | "target_relevance",
+    string,
+  ]> = [
+    ["direct_proof", "Direct proof"],
+    ["approved_enrichment", "Approved enrichment"],
+    ["supported_framing", "Supported framing"],
+    ["strategy_signals", "Strategy signals"],
+    ["target_relevance", "Target relevance"],
+  ];
+  return (
+    <div className="mt-4 rounded-2xl border border-[#d9e5de] bg-[#f7faf7] p-4">
+      <p className="text-xs font-semibold text-[#46685a]">
+        Grouped evidence by selected memory ({visibleGroups.length})
+      </p>
+      <div className="mt-4 space-y-3">
+        {visibleGroups.map((group, index) => (
+          <article className="rounded-xl border border-[#dfe7e2] bg-white p-3" key={group.memory_id ?? `${group.memory_title}:${index}`}>
+            <p className="text-xs font-semibold text-[#365247]">
+              {group.memory_title ?? "Target-level context"}
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {labels.map(([field, label]) => {
+                const values = group[field];
+                return values?.length ? (
+                  <div key={field}>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#657c71]">{label}</p>
+                    <ul className="mt-1 space-y-1">
+                      {values.map((value) => <li className="text-xs leading-5 text-[#61736b]" key={value}>{value}</li>)}
+                    </ul>
+                  </div>
+                ) : null;
+              })}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2463,7 +3194,12 @@ function editedOutputClaimIds(
     ids.add("cover-letter-full");
   }
   editor.application_snippets.forEach((snippet, index) => {
-    if (snippet.text !== original.application_snippets[index]?.text) {
+    const originalSnippet = snippet.question_id
+      ? original.application_snippets.find(
+          (candidate) => candidate.question_id === snippet.question_id,
+        )
+      : original.application_snippets[index];
+    if (snippet.text !== originalSnippet?.text) {
       ids.add(snippetApplicationClaimId(index));
     }
   });
@@ -2490,6 +3226,7 @@ function targetFormFromPackageInput(input: ApplicationPackageInput): TargetForm 
     requiredSkills: input.requiredSkills.join("\n"),
     preferredSkills: input.preferredSkills.join("\n"),
     responsibilities: input.responsibilities.join("\n"),
+    applicationQuestions: structuredClone(input.applicationQuestions),
   };
 }
 
@@ -2507,11 +3244,15 @@ function packageInput(
     requiredSkills: splitPackageList(form.requiredSkills),
     preferredSkills: splitPackageList(form.preferredSkills),
     responsibilities: splitPackageList(form.responsibilities),
+    applicationQuestions: structuredClone(form.applicationQuestions),
     selectedMemoryIds,
   };
 }
 
-function targetFromOpportunity(opportunity: ApplicationOpportunity): TargetForm {
+function targetFromOpportunity(
+  opportunity: ApplicationOpportunity,
+  applicationQuestions: ApplicationQuestion[] = [],
+): TargetForm {
   return {
     opportunityId: opportunity.id,
     roleTitle: opportunity.detected_role_type?.trim() || opportunity.title,
@@ -2522,6 +3263,18 @@ function targetFromOpportunity(opportunity: ApplicationOpportunity): TargetForm 
     requiredSkills: opportunity.detected_skills.join("\n"),
     preferredSkills: "",
     responsibilities: opportunity.detected_responsibilities.join("\n"),
+    applicationQuestions: structuredClone(applicationQuestions),
+  };
+}
+
+function newApplicationQuestion(): ApplicationQuestion {
+  return {
+    question_id: `question-${globalThis.crypto.randomUUID()}`,
+    question_text: "",
+    required: true,
+    maximum_length: null,
+    response_type: null,
+    relevant_target_requirement_ids: [],
   };
 }
 

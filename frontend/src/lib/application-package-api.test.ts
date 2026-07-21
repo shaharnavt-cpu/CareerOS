@@ -15,6 +15,16 @@ import {
 test("application package API follows the complete package and version contract", async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const applicationQuestions = [
+    {
+      question_id: "motivation",
+      question_text: "Why are you interested in this role?",
+      required: true,
+      maximum_length: 500,
+      response_type: "paragraph",
+      relevant_target_requirement_ids: ["requirement-python"],
+    },
+  ];
   globalThis.fetch = async (input, init) => {
     calls.push({ url: String(input), init });
     return new Response(JSON.stringify({}), {
@@ -38,15 +48,21 @@ test("application package API follows the complete package and version contract"
       required_skills: ["Python", "modeling"],
       preferred_skills: ["technical communication"],
       responsibilities: ["Analyze messy data"],
+      application_questions: applicationQuestions,
       selected_memory_ids: ["gas-memory", "unicorn-memory"],
     });
     await generateApplicationPackage("package-1", {
       selected_memory_ids: ["gas-memory", "unicorn-memory"],
+      application_questions: applicationQuestions,
     });
     await regenerateApplicationPackage("package-1", {
       selected_memory_ids: ["unicorn-memory", "gas-memory"],
+      application_questions: applicationQuestions,
     });
-    await updateApplicationPackage("package-1", { status: "ARCHIVED" });
+    await updateApplicationPackage("package-1", {
+      status: "ARCHIVED",
+      application_questions: applicationQuestions,
+    });
     await updateApplicationPackageOutputs("package-1", {
       edit_summary: "Reviewed wording",
       reviewer_questions: ["Can I support this metric?"],
@@ -76,19 +92,25 @@ test("application package API follows the complete package and version contract"
       required_skills: ["Python", "modeling"],
       preferred_skills: ["technical communication"],
       responsibilities: ["Analyze messy data"],
+      application_questions: applicationQuestions,
       selected_memory_ids: ["gas-memory", "unicorn-memory"],
     });
     assert.match(calls[5].url, /\/package-1\/generate$/);
     assert.deepEqual(JSON.parse(String(calls[5].init?.body)), {
       selected_memory_ids: ["gas-memory", "unicorn-memory"],
+      application_questions: applicationQuestions,
     });
     assert.match(calls[6].url, /\/package-1\/regenerate$/);
     assert.deepEqual(JSON.parse(String(calls[6].init?.body)), {
       selected_memory_ids: ["unicorn-memory", "gas-memory"],
+      application_questions: applicationQuestions,
     });
     assert.match(calls[7].url, /\/api\/application-packages\/package-1$/);
     assert.equal(calls[7].init?.method, "PATCH");
-    assert.match(String(calls[7].init?.body), /ARCHIVED/);
+    assert.deepEqual(JSON.parse(String(calls[7].init?.body)), {
+      status: "ARCHIVED",
+      application_questions: applicationQuestions,
+    });
     assert.match(calls[8].url, /\/package-1\/outputs$/);
     assert.equal(calls[8].init?.method, "PATCH");
     assert.match(String(calls[8].init?.body), /Reviewed wording/);
