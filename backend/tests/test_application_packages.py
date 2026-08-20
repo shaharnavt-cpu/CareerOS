@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,12 +18,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.application_packages import get_application_package_service
 from app.core.config import Settings
 from app.db.session import SessionLocal, engine
+from app.fixtures.application_writing_demo import build_maya_chen_demo_writing_input
 from app.main import app
 from app.models import (
     ApplicationPackage,
     ApplicationPackageVersion,
     CanonicalMemoryRecord,
     CareerMemoryEnrichment,
+    ListeningEvidence,
+    ListeningSource,
     ReviewProposal,
 )
 from app.schemas.application_packages import (
@@ -46,7 +50,9 @@ from app.services.application_packages import (
     ApplicationPackageValidationError,
     _EditedClaim,
 )
+from app.services.career_memory_compiler import CareerMemoryCompiler
 from app.services.proof_artifacts import ProofArtifactService
+from tests.test_application_writing_claim_contract import _valid_output
 from tests.test_career_memory_compiler import (
     GAS_TITLE,
     UNICORN_TITLE,
@@ -251,6 +257,225 @@ def _seed_unapproved_memory(user_id: uuid.UUID) -> uuid.UUID:
         session.add(memory)
         session.flush()
         return memory.id
+
+
+NULLABLE_SKILL_TITLE = "Technical Skills"
+GALAXY_VIP_TITLE = "Galaxy Evolution VIP"
+
+
+def _seed_nullable_skill_memory(
+    user_id: uuid.UUID,
+    *,
+    with_direct_evidence: bool = False,
+    direct_evidence_skills: tuple[str, ...] = ("Python", "SQL", "Excel", "R"),
+) -> uuid.UUID:
+    """Approve a generic Technical Skills memory with no research/problem field.
+
+    Skill, education, and employment memories legitimately compile with
+    ``research_question_or_problem`` set to ``None`` because none of the
+    research/project/problem/objective/goal/summary/description fields exist.
+    """
+
+    proposal_id = f"approved-skill-memory-{user_id}"
+    with SessionLocal.begin() as session:
+        proposal = ReviewProposal(
+            id=proposal_id,
+            user_id=user_id,
+            proposal_type="SKILL_SET",
+            entity_type="SKILL",
+            title=NULLABLE_SKILL_TITLE,
+            identity_key=f"approved-skill-memory-{user_id}",
+            proposal_data={"title": NULLABLE_SKILL_TITLE},
+            decision="APPROVED",
+        )
+        session.add(proposal)
+        session.flush()
+        evidence_ids: list[str] = []
+        source_ids: list[str] = []
+        if with_direct_evidence:
+            supported_skills = ", ".join(direct_evidence_skills)
+            source = ListeningSource(
+                user_id=user_id,
+                source_type="MANUAL",
+                label="Reviewed Technical Skills work samples",
+                raw_text=(
+                    "Reviewed work samples document technical work using "
+                    f"{supported_skills}."
+                ),
+                source_metadata={},
+                provenance={},
+                content_hash=f"approved-skill-source-{user_id}",
+                adapter_version="application-package-test-v1",
+                status="READY",
+            )
+            session.add(source)
+            session.flush()
+            evidence = ListeningEvidence(
+                user_id=user_id,
+                source_id=source.id,
+                source_type="MANUAL",
+                raw_excerpt=(
+                    f"Documented technical work used {supported_skills}."
+                ),
+                normalized_excerpt=None,
+                excerpt_hash=f"approved-skill-evidence-{user_id}",
+                category="SKILL",
+                confidence=Decimal("0.930"),
+                location={},
+                provenance={},
+            )
+            session.add(evidence)
+            session.flush()
+            evidence_ids = [str(evidence.id)]
+            source_ids = [str(source.id)]
+        memory = CanonicalMemoryRecord(
+            user_id=user_id,
+            identity_key=f"approved-skill-memory-{user_id}",
+            memory_type="SKILL_SET",
+            title=NULLABLE_SKILL_TITLE,
+            structured_fields={
+                "name": NULLABLE_SKILL_TITLE,
+                "category": "Technical Skills",
+                "skills": ["Python", "SQL", "Excel", "R"],
+            },
+            evidence_ids=evidence_ids,
+            source_ids=source_ids,
+            confidence=Decimal("0.900"),
+            review_proposal_id=proposal_id,
+        )
+        session.add(memory)
+        session.flush()
+        return memory.id
+
+
+def _seed_galaxy_vip_memory(user_id: uuid.UUID) -> uuid.UUID:
+    """Approve a fourth, independently sourced project memory."""
+
+    proposal_id = f"approved-galaxy-vip-memory-{user_id}"
+    with SessionLocal.begin() as session:
+        proposal = ReviewProposal(
+            id=proposal_id,
+            user_id=user_id,
+            proposal_type="PROJECT",
+            entity_type="PROJECT",
+            title=GALAXY_VIP_TITLE,
+            identity_key=f"approved-galaxy-vip-memory-{user_id}",
+            proposal_data={"title": GALAXY_VIP_TITLE},
+            decision="APPROVED",
+        )
+        session.add(proposal)
+        session.flush()
+        memory = CanonicalMemoryRecord(
+            user_id=user_id,
+            identity_key=f"approved-galaxy-vip-memory-{user_id}",
+            memory_type="PROJECT",
+            title=GALAXY_VIP_TITLE,
+            structured_fields={
+                "title": GALAXY_VIP_TITLE,
+                "research_question": (
+                    "How observational evidence informs models of galaxy evolution."
+                ),
+                "summary": "A literature analysis and presentation project.",
+            },
+            evidence_ids=[],
+            source_ids=[],
+            confidence=Decimal("0.880"),
+            review_proposal_id=proposal_id,
+        )
+        session.add(memory)
+        session.flush()
+        session.add(
+            _enrichment(
+                user_id=user_id,
+                memory_id=memory.id,
+                memory_title=memory.title,
+                status="APPROVED",
+                structured={
+                    "project_title": GALAXY_VIP_TITLE,
+                    "research_question": (
+                        "How observational evidence informs models of galaxy evolution."
+                    ),
+                    "data_or_inputs": ["peer-reviewed galaxy evolution literature"],
+                    "tools_or_methods": [
+                        "literature analysis and synthesis",
+                        "technical presentation",
+                    ],
+                    "findings_or_results": [
+                        "Synthesized competing explanations without claiming new "
+                        "observational results."
+                    ],
+                    "warnings_not_to_claim": [
+                        "Do not attribute Gas or UNICORN project methods to this "
+                        "memory."
+                    ],
+                },
+            )
+        )
+        return memory.id
+
+
+def _resume_bullet_texts(package: ApplicationPackageView) -> list[str]:
+    assert package.latest_version is not None
+    return [
+        bullet.bullet_text
+        for group in package.latest_version.outputs.resume_bullets
+        for bullet in group.bullets
+    ]
+
+
+def test_problem_phrase_returns_empty_for_null_and_blank_values() -> None:
+    problem_phrase = ApplicationPackageService._problem_phrase
+
+    assert problem_phrase(None) == ""
+    assert problem_phrase("") == ""
+    assert problem_phrase("   ") == ""
+    assert problem_phrase(" . ") == ""
+    # A populated research description is normalized and lower-cased as before.
+    assert problem_phrase(
+        "The project tested whether gas kinematics relates to morphology."
+    ) == "gas kinematics relates to morphology"
+
+
+def test_local_resume_atoms_ignore_incidental_short_target_title_match() -> None:
+    """A short target title must not become proof for a memory-scoped bullet."""
+
+    writing_input = build_maya_chen_demo_writing_input()
+    writing_input.target_role = "Data"
+    unicorn_memory_id = "demo-memory-image-quality"
+    unicorn_bullet = (
+        "Analyzed astronomical telescope imaging data with manual inspection of and "
+        "detection review to investigate how to organize, inspect, categorize, and "
+        "review and keep the final interpretation grounded in evidence."
+    )
+    draft = _valid_output(writing_input)
+    draft.resume_bullet_groups[0].memory_id = unicorn_memory_id
+    draft.resume_bullet_groups[0].bullets[0].text = unicorn_bullet
+
+    service = _application_package_service(uuid.uuid4())
+    claims = service._local_candidate_claims(
+        draft,
+        writing_input,
+        [SimpleNamespace(profile=SimpleNamespace(memory_id=unicorn_memory_id))],
+    )
+    resume_claim = next(
+        claim
+        for claim in claims
+        if claim.field_path == "resume_bullet_groups.0.bullets.0.text"
+    )
+    atom_by_id = {
+        atom.evidence_atom_id: atom for atom in writing_input.evidence_ledger
+    }
+    atoms = [atom_by_id[atom_id] for atom_id in resume_claim.evidence_atom_ids]
+
+    assert resume_claim.claim_type.value == "resume-bullet"
+    assert resume_claim.claim_text == unicorn_bullet
+    assert atoms
+    assert all(atom.canonical_memory_id == unicorn_memory_id for atom in atoms)
+    assert all(atom.support_type.value != "target-context" for atom in atoms)
+    assert ApplicationPackageService._mask_generated_target_labels(
+        "Data analysis supports this Data role.",
+        {"role_title": "Data", "company": None},
+    ) == "Data analysis supports this target role."
 
 
 def test_selection_requires_explicit_current_user_approved_memory_ids(
@@ -504,10 +729,26 @@ def test_unicorn_ai_package_preserves_project_boundary(
     rich_package_fixture: RichPackageFixture,
 ) -> None:
     fixture = rich_package_fixture
+    with SessionLocal.begin() as session:
+        enrichment = session.get(
+            CareerMemoryEnrichment,
+            fixture.seeded.unicorn_approved_enrichment_id,
+        )
+        assert enrichment is not None
+        structured = dict(enrichment.structured_enrichment)
+        structured["findings_or_results"] = (
+            "Improved labeling and review efficiency and better organization of "
+            "image categories."
+        )
+        enrichment.structured_enrichment = structured
+
     generated = _create_and_generate(
         fixture,
         selected_memory_ids=[fixture.seeded.unicorn_memory_id],
-        role_title="AI Engineer Intern",
+        # Manual QA exposed a separate title-truncation defect that left this as
+        # "Data". Generation must not mistake the word "data" in a UNICORN bullet
+        # for a target-context evidence atom.
+        role_title="Data",
         target_description=(
             "AI-ready data quality, image labeling, human-in-the-loop review, "
             "automation, and Python."
@@ -529,10 +770,10 @@ def test_unicorn_ai_package_preserves_project_boundary(
         "detection review",
         "categorization",
         "t-sne",
-        "data quality",
-        "human-in-the-loop",
     ):
         assert supported in claims
+    for target_only in ("data quality", "human-in-the-loop"):
+        assert target_only not in claims
     for gas_only in (
         "gas kinematics",
         "h-alpha",
@@ -547,6 +788,111 @@ def test_unicorn_ai_package_preserves_project_boundary(
     ):
         assert gas_only not in claims
     assert "deployed" not in claims
+    for mechanical in (
+        "the approved evidence reports",
+        "the documented result was",
+        "approved memory",
+        "approved evidence",
+    ):
+        assert mechanical not in claims
+    assert "through manual inspection and detection review" in claims
+    assert "goal of organizing, inspecting, and reviewing" in claims
+    assert "by manually inspecting plots and images" in claims
+    assert "reviewing detection candidates" in claims
+    assert "improved efficiency in labeling and review" in claims
+    assert "labeling or review efficiency" not in claims
+    assert "source or detection candidates" not in claims
+    assert "through inspected" not in claims
+    assert "to investigate organizing" not in claims
+    assert not re.search(
+        r"\b(?:and|or|of|to|for|with|through|around|using|as)\s+"
+        r"(?:and|or|then)\b",
+        claims,
+    )
+    assert generated.latest_version is not None
+    resume_claims = [
+        item
+        for item in generated.latest_version.claim_ledger
+        if item.surface == "resume"
+    ]
+    assert resume_claims
+    assert all(
+        item.memory_ids == [fixture.seeded.unicorn_memory_id]
+        for item in resume_claims
+    )
+
+
+def test_single_article_titled_project_uses_natural_candidate_grammar(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    fixture = rich_package_fixture
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=[fixture.seeded.unicorn_memory_id],
+        role_title="Data Analyst Intern",
+        target_description=(
+            "Analyze image data, review labeling workflows, and document findings."
+        ),
+        application_questions=[],
+    )
+
+    assert generated.latest_version is not None
+    outputs = generated.latest_version.outputs
+    cover = outputs.cover_letter
+    cover_text = cover.full_text.casefold()
+    resume_text = " ".join(
+        bullet.bullet_text
+        for group in outputs.resume_bullets
+        for bullet in group.bullets
+    ).casefold()
+
+    assert generated.application_snippets == []
+    assert "my the unicorn project" not in cover_text
+    assert "in the unicorn project" in cover_text
+    assert "ability to labeling" not in cover_text
+    assert "a labeling and categorization workflow" in cover_text
+    assert "my strongest projects" not in cover_text
+    assert "this project required" in cover.opening_paragraph.casefold()
+    assert cover_text.count(
+        "labeling and categorization workflow, technical documentation, "
+        "and manual inspection of plots and images"
+    ) <= 1
+    secondary_paragraph = cover.body_paragraphs[1].casefold()
+    assert "gave me experience with" not in secondary_paragraph
+    assert "labeling and categorization workflow" not in secondary_paragraph
+    assert "habit of keeping the final interpretation grounded in evidence" in (
+        secondary_paragraph
+    )
+    assert "data analyst intern team" not in cover.closing_paragraph.casefold()
+    assert cover.closing_paragraph.casefold().count("discuss") == 1
+    assert cover.closing_paragraph.casefold().count("role") == 1
+    assert "reviewing detection candidates" in resume_text
+    assert "source or detection candidates" not in resume_text
+
+    invalid_outputs = outputs.model_copy(deep=True)
+    invalid_outputs.cover_letter.full_text = (
+        "In my The Example Project, the work strengthened my ability to labeling "
+        "and categorization workflow."
+    )
+    invalid_review = ApplicationPackageService._evaluate_output_quality(
+        invalid_outputs
+    )
+    assert invalid_review.naturalness == "Needs attention"
+    assert any("grammar" in note.casefold() for note in invalid_review.notes)
+
+    repeated_outputs = outputs.model_copy(deep=True)
+    capability_chain = (
+        "labeling and categorization, technical documentation, and manual inspection"
+    )
+    repeated_outputs.cover_letter.full_text = (
+        f"This project required {capability_chain}.\n\n"
+        f"I would bring {capability_chain} to the role."
+    )
+    repeated_review = ApplicationPackageService._evaluate_output_quality(
+        repeated_outputs
+    )
+    assert repeated_review.repetition == "High"
+    assert any("repeated" in note.casefold() for note in repeated_review.notes)
 
 
 def test_unsupported_cloud_and_deployment_requirements_warn_without_claiming_them(
@@ -657,6 +1003,272 @@ def test_sparse_memory_does_not_invent_technical_capability(
         for item in generated.warnings
         if item.code == "UNSUPPORTED_TARGET_REQUIREMENT" and item.requirement
     }
+
+
+def _assert_no_blank_or_none_bullets(package: ApplicationPackageView) -> None:
+    for bullet_text in _resume_bullet_texts(package):
+        assert bullet_text.strip(), "résumé bullets must never be blank"
+        assert "None" not in bullet_text, "the literal value 'None' must never surface"
+
+
+def test_nullable_skill_memory_with_gas_and_unicorn_generates_cleanly(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    """Scenario A: a null research_question memory must not break generation."""
+
+    fixture = rich_package_fixture
+    skill_memory_id = _seed_nullable_skill_memory(
+        fixture.user_id,
+        with_direct_evidence=True,
+    )
+
+    # The Technical Skills memory legitimately compiles with no research problem.
+    with SessionLocal() as session:
+        skill_profile = CareerMemoryCompiler(user_id=fixture.user_id).compile(
+            session, skill_memory_id, target_role="Data Science Intern"
+        )
+    assert skill_profile.research_question_or_problem is None
+
+    service = _application_package_service(fixture.user_id)
+    with SessionLocal() as session:
+        eligible_ids = {
+            item.id
+            for item in service.list_eligible_memories(session, "Data Science Intern")
+        }
+    # Generic non-research memories remain eligible and selectable.
+    assert skill_memory_id in eligible_ids
+
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=[
+            fixture.seeded.gas_memory_id,
+            fixture.seeded.unicorn_memory_id,
+            skill_memory_id,
+        ],
+        role_title="Data Science Intern",
+        target_description=(
+            "Analyze scientific data, communicate uncertainty, and use Python."
+        ),
+        application_questions=[],
+    )
+
+    # A successful, immutable first version was created.
+    assert generated.latest_version is not None
+    assert generated.latest_version.version_number == 1
+    assert generated.version_count == 1
+    assert skill_memory_id in generated.memory_ids_used
+
+    _assert_no_blank_or_none_bullets(generated)
+    claims = _substantive_claim_text(generated)
+
+    # No fabricated research problem is attributed to the Technical Skills memory.
+    for invented in (
+        "investigate technical skills",
+        "the project focused on",
+        "the project tested whether",
+    ):
+        assert invented not in claims
+
+    # Gas and UNICORN evidence stay correctly separated: gas-only jargon never
+    # appears in the UNICORN résumé group and vice versa.
+    gas_bullets = _bullets_for_memory_title(generated, GAS_TITLE)
+    unicorn_bullets = _bullets_for_memory_title(generated, UNICORN_TITLE)
+    for gas_only in ("h-alpha", "nirspec", "galfit", "ceers", "velocity dispersion"):
+        assert gas_only not in unicorn_bullets
+    for unicorn_only in ("t-sne", "detection review"):
+        assert unicorn_only not in gas_bullets
+
+    # Zero application questions produce zero application answers.
+    assert generated.application_snippets == []
+
+
+def _bullets_for_memory_title(package: ApplicationPackageView, title: str) -> str:
+    """Casefolded résumé bullet text attributed to a single memory title."""
+
+    assert package.latest_version is not None
+    values = [
+        bullet.bullet_text
+        for group in package.latest_version.outputs.resume_bullets
+        if title in (group.memory_title or "")
+        for bullet in group.bullets
+    ]
+    return " ".join(values).casefold()
+
+
+def test_nullable_skill_memory_without_proof_omits_unsupported_capabilities(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    """Selection metadata alone must not prove concrete technical capabilities."""
+
+    fixture = rich_package_fixture
+    skill_memory_id = _seed_nullable_skill_memory(fixture.user_id)
+
+    with SessionLocal() as session:
+        skill_profile = CareerMemoryCompiler(user_id=fixture.user_id).compile(
+            session, skill_memory_id, target_role="Data Analytics Intern"
+        )
+    assert skill_profile.research_question_or_problem is None
+
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=[skill_memory_id],
+        role_title="Data Analytics Intern",
+        target_description="Use Python and SQL to analyze and report on data.",
+        application_questions=[],
+    )
+
+    # Generation succeeds and records a successful immutable version.
+    assert generated.latest_version is not None
+    assert generated.latest_version.version_number == 1
+    assert generated.memory_ids_used == [skill_memory_id]
+
+    assert generated.resume_bullets == []
+    _assert_no_blank_or_none_bullets(generated)
+    claims = _substantive_claim_text(generated)
+    for unsupported in ("python", "sql", "excel"):
+        assert unsupported not in claims
+    for invented in (
+        "investigate technical skills",
+        "concrete project",
+        "the project focused on",
+        "the project tested whether",
+    ):
+        assert invented not in claims
+    assert generated.application_snippets == []
+
+
+def test_nullable_skill_memory_with_direct_evidence_generates_supported_claims(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    fixture = rich_package_fixture
+    skill_memory_id = _seed_nullable_skill_memory(
+        fixture.user_id,
+        with_direct_evidence=True,
+    )
+
+    with SessionLocal() as session:
+        profile = CareerMemoryCompiler(user_id=fixture.user_id).compile(
+            session, skill_memory_id, target_role="Data Analytics Intern"
+        )
+    assert profile.research_question_or_problem is None
+
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=[skill_memory_id],
+        role_title="Data Analytics Intern",
+        target_description="Use Python and SQL to analyze and report on data.",
+        application_questions=[],
+    )
+
+    assert generated.latest_version is not None
+    assert generated.latest_version.version_number == 1
+    assert generated.version_count == 1
+    claims = _substantive_claim_text(generated)
+    assert "python" in claims
+    assert "sql" in claims
+    assert "concrete project" not in claims
+    assert "investigate technical skills" not in claims
+    _assert_no_blank_or_none_bullets(generated)
+    assert generated.application_snippets == []
+
+
+def test_skill_memory_exposes_only_capabilities_named_by_direct_proof(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    """One supported skill must not unlock unsupported selection metadata."""
+
+    fixture = rich_package_fixture
+    skill_memory_id = _seed_nullable_skill_memory(
+        fixture.user_id,
+        with_direct_evidence=True,
+        direct_evidence_skills=("Python",),
+    )
+
+    with SessionLocal() as session:
+        profile = CareerMemoryCompiler(user_id=fixture.user_id).compile(
+            session, skill_memory_id, target_role="Data Analytics Intern"
+        )
+    assert {"Python", "SQL"}.issubset(set(profile.skills_demonstrated))
+
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=[skill_memory_id],
+        role_title="Data Analytics Intern",
+        target_description="Use Python and SQL to analyze data.",
+        required_skills=["Python", "SQL"],
+        application_questions=[],
+    )
+    claims = _substantive_claim_text(generated)
+
+    assert "python" in claims
+    assert "sql" not in claims
+    assert generated.latest_version is not None
+    assert all(
+        "sql" not in {tool.casefold() for tool in item.tools_claimed}
+        for item in generated.latest_version.claim_ledger
+    )
+    assert "sql" in {
+        item.requirement.casefold()
+        for item in generated.warnings
+        if item.code == "UNSUPPORTED_TARGET_REQUIREMENT" and item.requirement
+    }
+
+
+def test_all_four_memories_generate_with_separate_evidence_groups(
+    rich_package_fixture: RichPackageFixture,
+) -> None:
+    fixture = rich_package_fixture
+    skill_memory_id = _seed_nullable_skill_memory(
+        fixture.user_id,
+        with_direct_evidence=True,
+    )
+    galaxy_memory_id = _seed_galaxy_vip_memory(fixture.user_id)
+    selected_ids = [
+        fixture.seeded.gas_memory_id,
+        fixture.seeded.unicorn_memory_id,
+        skill_memory_id,
+        galaxy_memory_id,
+    ]
+
+    generated = _create_and_generate(
+        fixture,
+        selected_memory_ids=selected_ids,
+        role_title="Data",
+        target_description=(
+            "Analyze scientific data, review image quality, synthesize evidence, "
+            "and communicate findings."
+        ),
+        application_questions=[],
+    )
+
+    assert generated.selected_memory_ids == selected_ids
+    assert set(generated.memory_ids_used) == set(selected_ids)
+    assert generated.latest_version is not None
+    assert generated.latest_version.version_number == 1
+    assert generated.version_count == 1
+    assert generated.latest_version.validation_summary.status == "PASS"
+    assert generated.application_snippets == []
+    _assert_no_blank_or_none_bullets(generated)
+
+    groups_by_memory = {
+        group.memory_id: group
+        for group in generated.evidence_groups
+        if group.memory_id is not None
+    }
+    assert set(groups_by_memory) == set(selected_ids)
+    for memory_id in selected_ids:
+        group = groups_by_memory[memory_id]
+        assert group.direct_proof or group.approved_enrichment
+
+    gas_bullets = _bullets_for_memory_title(generated, GAS_TITLE)
+    unicorn_bullets = _bullets_for_memory_title(generated, UNICORN_TITLE)
+    galaxy_bullets = _bullets_for_memory_title(generated, GALAXY_VIP_TITLE)
+    for gas_only in ("h-alpha", "nirspec", "galfit", "ceers", "velocity dispersion"):
+        assert gas_only not in unicorn_bullets
+        assert gas_only not in galaxy_bullets
+    for unicorn_only in ("t-sne", "detection review", "hot pixels"):
+        assert unicorn_only not in gas_bullets
+        assert unicorn_only not in galaxy_bullets
 
 
 def test_title_only_project_shortcuts_require_substantive_proof_and_keep_provenance(
@@ -1386,13 +1998,13 @@ def test_application_package_api_crud_generate_edit_regenerate_and_archive(
         with TestClient(app) as client:
             eligible = client.get(
                 "/api/application-packages/eligible-memories",
-                params={"target_role": "Data Science Intern"},
+                params={"target_role": "Data Analytics Intern"},
             )
             created = client.post(
                 "/api/application-packages",
                 json={
                     "display_name": "Test application package",
-                    "role_title": "Data Science Intern",
+                    "role_title": "Data Analytics Intern",
                     "company": "Test Company",
                     "location": "Remote",
                     "job_type": "Internship",
@@ -1417,6 +2029,7 @@ def test_application_package_api_crud_generate_edit_regenerate_and_archive(
             assert created.status_code == 201
             created_body = created.json()
             package_id = created_body["package_id"]
+            assert created_body["role_title"] == "Data Analytics Intern"
             assert created_body["latest_version"] is None
             assert created_body["version_count"] == 0
 

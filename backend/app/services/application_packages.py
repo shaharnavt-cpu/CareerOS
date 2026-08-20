@@ -1250,6 +1250,14 @@ class ApplicationPackageService:
         outcome_signals: list[StrategyOutcomeSignal] = []
         for item in ranked:
             profile = item.profile
+            has_claim_support = self._profile_has_claim_support(profile)
+            supported_capabilities = self._profile_supported_capabilities(profile)
+            supported_methods = self._profile_supported_values(
+                profile, profile.methods
+            )
+            supported_outcomes = self._profile_supported_values(
+                profile, profile.findings_or_results
+            )
             traces = self._claim_trace_for_profile(profile)
             reference_ids = [trace.trace_id for trace in traces]
             selected_memories.append(
@@ -1258,18 +1266,23 @@ class ApplicationPackageService:
                     title=profile.canonical_title,
                     memory_type=profile.memory_type,
                     summary=self._profile_evidence_summary(profile)[:5000],
-                    approved_claims=self._unique(
-                        [
-                            *profile.proof_claims,
-                            *profile.resume_bullet_claims,
-                            *profile.findings_or_results,
-                        ]
-                    )[:50],
-                    skills_and_tools=self._unique(
-                        [*profile.skills_demonstrated, *profile.tools]
-                    )[:50],
-                    methods=profile.methods[:50],
-                    outcomes=profile.findings_or_results[:25],
+                    approved_claims=(
+                        self._unique(
+                            self._profile_supported_values(
+                                profile,
+                                [
+                                    *profile.proof_claims,
+                                    *profile.resume_bullet_claims,
+                                    *profile.findings_or_results,
+                                ],
+                            )
+                        )[:50]
+                        if has_claim_support
+                        else []
+                    ),
+                    skills_and_tools=supported_capabilities[:50],
+                    methods=supported_methods[:50],
+                    outcomes=supported_outcomes[:25],
                     evidence_reference_ids=reference_ids[:100],
                     confidence=profile.confidence,
                 )
@@ -1458,15 +1471,20 @@ class ApplicationPackageService:
         for item in ranked:
             profile = item.profile
             memory_id = str(profile.memory_id)
+            has_claim_support = self._profile_has_claim_support(profile)
+            supported_capabilities = self._profile_supported_capabilities(profile)
+            supported_methods = self._profile_supported_values(
+                profile, profile.methods
+            )
             references = sorted(
                 self._unique(
                     trace.trace_id for trace in self._factual_trace_for_profile(profile)
                 )
             )[:100]
             tools = self._unique(
-                [*profile.tools, *profile.skills_demonstrated, *profile.methods]
+                [*supported_capabilities, *supported_methods]
             )[:50]
-            methods = self._unique(profile.methods)[:50]
+            methods = self._unique(supported_methods)[:50]
             prohibitions = self._unique(profile.warnings_not_to_claim)[:50]
             context = self._profile_evidence_summary(profile)[:5000]
             atoms.append(
@@ -1488,19 +1506,35 @@ class ApplicationPackageService:
                 )
             )
             component_statements: list[tuple[str, str]] = []
-            if profile.research_question_or_problem:
+            if (
+                has_claim_support
+                and profile.research_question_or_problem
+                and self._profile_value_has_claim_support(
+                    profile, profile.research_question_or_problem
+                )
+            ):
                 component_statements.append(
                     ("problem", profile.research_question_or_problem)
                 )
-            component_statements.extend(
-                ("input", value) for value in profile.data_or_inputs
-            )
-            component_statements.extend(
-                ("workflow", value) for value in profile.workflow_steps
-            )
-            component_statements.extend(
-                ("limitation", value) for value in profile.limitations
-            )
+            if has_claim_support:
+                component_statements.extend(
+                    ("input", value)
+                    for value in self._profile_supported_values(
+                        profile, profile.data_or_inputs
+                    )
+                )
+                component_statements.extend(
+                    ("workflow", value)
+                    for value in self._profile_supported_values(
+                        profile, profile.workflow_steps
+                    )
+                )
+                component_statements.extend(
+                    ("limitation", value)
+                    for value in self._profile_supported_values(
+                        profile, profile.limitations
+                    )
+                )
             for component_kind, statement in component_statements:
                 rendered_statement = " ".join(statement.split()).strip()
                 if not rendered_statement:
@@ -1523,20 +1557,29 @@ class ApplicationPackageService:
                         evidence_reference_ids=references,
                         support_type=EvidenceAtomSupportType.DIRECT,
                         factual_statement=rendered_statement[:5000],
-                        supported_tools=self._tools_explicit_in_text(
-                            profile, rendered_statement
-                        ),
+                        supported_tools=[
+                            tool
+                            for tool in supported_capabilities
+                            if self._literal_in_text(tool, rendered_statement)
+                        ][:50],
                         supported_methods=[
                             method
-                            for method in profile.methods
+                            for method in methods
                             if self._literal_in_text(method, rendered_statement)
                         ][:50],
                         allowed_certainty=self._claim_certainty(rendered_statement),
                         prohibited_expansions=prohibitions,
                     )
                 )
-            approved_claims = self._unique(
-                [*profile.proof_claims, *profile.resume_bullet_claims]
+            approved_claims = (
+                self._profile_supported_values(
+                    profile,
+                    self._unique(
+                        [*profile.proof_claims, *profile.resume_bullet_claims]
+                    ),
+                )
+                if has_claim_support
+                else []
             )
             for claim in approved_claims:
                 atoms.append(
@@ -1551,15 +1594,31 @@ class ApplicationPackageService:
                         evidence_reference_ids=references,
                         support_type=EvidenceAtomSupportType.DIRECT,
                         factual_statement=claim[:5000],
-                        supported_tools=tools,
-                        supported_methods=methods,
+                        supported_tools=[
+                            tool
+                            for tool in supported_capabilities
+                            if self._literal_in_text(tool, claim)
+                        ][:50],
+                        supported_methods=[
+                            method
+                            for method in methods
+                            if self._literal_in_text(method, claim)
+                        ][:50],
                         allowed_certainty=self._claim_certainty(claim),
                         prohibited_expansions=prohibitions,
                     )
                 )
-            for outcome_text in self._unique(profile.findings_or_results):
+            for outcome_text in (
+                self._profile_supported_values(
+                    profile, self._unique(profile.findings_or_results)
+                )
+                if has_claim_support
+                else []
+            ):
                 outcome_source_id = references[0] if references else memory_id
-                outcome = self._structured_outcome(outcome_text, outcome_source_id)
+                outcome = self._structured_outcome(
+                    self._candidate_result_phrase(outcome_text), outcome_source_id
+                )
                 atoms.append(
                     ApprovedEvidenceAtom(
                         evidence_atom_id=self._stable_contract_id(
@@ -1575,8 +1634,16 @@ class ApplicationPackageService:
                         evidence_reference_ids=references,
                         support_type=EvidenceAtomSupportType.DIRECT,
                         factual_statement=outcome_text[:5000],
-                        supported_tools=tools,
-                        supported_methods=methods,
+                        supported_tools=[
+                            tool
+                            for tool in supported_capabilities
+                            if self._literal_in_text(tool, outcome_text)
+                        ][:50],
+                        supported_methods=[
+                            method
+                            for method in methods
+                            if self._literal_in_text(method, outcome_text)
+                        ][:50],
                         supported_outcome=outcome,
                         allowed_certainty=outcome.certainty,
                         prohibited_expansions=prohibitions,
@@ -2030,12 +2097,14 @@ class ApplicationPackageService:
             memory_ids: Iterable[str],
             *,
             include_target: bool = False,
+            strict_memory_scope: bool = False,
         ) -> None:
             atoms = self._local_claim_atoms(
                 writing_input,
                 text,
                 set(memory_ids),
                 include_target=include_target,
+                strict_memory_scope=strict_memory_scope,
             )
             outcome_atom = self._matching_outcome_atom(text, atoms)
             if outcome_atom is not None and outcome_atom.supported_outcome is not None:
@@ -2102,6 +2171,7 @@ class ApplicationPackageService:
                     bullet.text,
                     CandidateClaimType.RESUME_BULLET,
                     (group.memory_id,),
+                    strict_memory_scope=True,
                 )
 
         secondary_id = (
@@ -2155,10 +2225,13 @@ class ApplicationPackageService:
         memory_ids: set[str],
         *,
         include_target: bool,
+        strict_memory_scope: bool = False,
     ) -> list[ApprovedEvidenceAtom]:
         normalized_role = " ".join(writing_input.target_role.split()).strip()
         include_target = include_target or bool(
-            normalized_role and re.search(re.escape(normalized_role), text, re.I)
+            not strict_memory_scope
+            and normalized_role
+            and re.search(re.escape(normalized_role), text, re.I)
         )
         eligible = [
             atom
@@ -2736,10 +2809,23 @@ class ApplicationPackageService:
         target_snapshot: dict[str, Any],
     ) -> str:
         masked = value
-        for field in ("role_title", "company"):
-            label = str(target_snapshot.get(field) or "").strip()
-            if label:
-                masked = re.sub(re.escape(label), "target role", masked, flags=re.I)
+        role_title = str(target_snapshot.get("role_title") or "").strip()
+        if role_title:
+            masked = re.sub(
+                rf"(?<!\w){re.escape(role_title)}\s+"
+                r"(?P<context>role|position|application|team)\b",
+                lambda match: f"target {match.group('context')}",
+                masked,
+                flags=re.I,
+            )
+        company = str(target_snapshot.get("company") or "").strip()
+        if company:
+            masked = re.sub(
+                rf"\b(?P<prefix>at|with|dear)\s+{re.escape(company)}\b",
+                lambda match: f"{match.group('prefix')} target company",
+                masked,
+                flags=re.I,
+            )
         return masked
 
     def _writing_intelligence(
@@ -2875,8 +2961,10 @@ class ApplicationPackageService:
         bullet_texts = self._derived_resume_bullets(profile)
         if len(bullet_texts) < 2:
             safe_compiled = [
-                claim
-                for claim in profile.resume_bullet_claims
+                self._candidate_source_phrase(claim)
+                for claim in self._profile_supported_values(
+                    profile, profile.resume_bullet_claims
+                )
                 if 12 <= len(claim.split()) <= 38
                 and not self._contains_mechanical_phrase(claim)
             ]
@@ -2904,49 +2992,82 @@ class ApplicationPackageService:
         self,
         profile: CompiledCareerMemoryProfile,
     ) -> list[str]:
+        if not self._profile_has_claim_support(profile):
+            return []
+        supported_capabilities = self._profile_supported_capabilities(profile)
+        if profile.memory_type == "SKILL_SET" and supported_capabilities:
+            skills = self._join(supported_capabilities[:4])
+            return [f"Used {skills} in documented technical work"]
+
         bullets: list[str] = []
+        supported_problems = self._profile_supported_values(
+            profile, [profile.research_question_or_problem or ""]
+        )
+        supported_methods = self._profile_supported_values(profile, profile.methods)
+        supported_inputs = self._profile_supported_values(
+            profile, profile.data_or_inputs
+        )
+        supported_workflow = self._profile_supported_values(
+            profile, profile.workflow_steps
+        )
+        supported_results = self._profile_supported_values(
+            profile, profile.findings_or_results
+        )
         problem = self._compact_phrase(
-            self._problem_phrase(profile.research_question_or_problem), 7
+            self._problem_phrase(supported_problems[0] if supported_problems else None),
+            7,
         )
         method = self._join(
-            [self._compact_phrase(value, 3) for value in profile.methods[:2]]
+            [self._compact_phrase(value, 3) for value in supported_methods[:2]]
         )
         data = (
-            self._compact_phrase(profile.data_or_inputs[0], 5)
-            if profile.data_or_inputs
+            self._compact_phrase(supported_inputs[0], 5)
+            if supported_inputs
             else ""
         )
         if method and data and problem:
             bullets.append(
-                f"Analyzed {data} with {method} to investigate {problem} and keep "
-                "the final interpretation grounded in evidence"
+                f"Analyzed {data} through {method} to address the documented goal "
+                f"of {problem}, keeping the final interpretation grounded in evidence"
             )
         elif method and problem:
             bullets.append(
-                f"Applied {method} to investigate {problem}, documenting the "
-                "analytical choices that shaped the final interpretation"
+                f"Applied {method} to address the documented goal of {problem}, "
+                "recording the choices that shaped the final interpretation"
             )
-        elif profile.workflow_steps and problem:
-            step = self._compact_phrase(profile.workflow_steps[0], 9)
+        elif supported_workflow and problem:
+            step = self._compact_phrase(supported_workflow[0], 9)
             bullets.append(
-                f"Built a project workflow around {step} to investigate {problem} "
-                "and preserve a clear connection between analysis and conclusion"
+                f"Built a project workflow around {step} to address the documented "
+                f"goal of {problem} and connect the work to the final conclusion"
             )
 
-        if profile.workflow_steps:
+        if supported_workflow:
             checks = self._join(
-                [self._compact_phrase(value, 4) for value in profile.workflow_steps[:2]]
+                [
+                    self._gerund_action_phrase(self._compact_phrase(value, 5))
+                    for value in supported_workflow[:2]
+                ]
             )
-            if profile.findings_or_results:
-                result = self._compact_phrase(profile.findings_or_results[0], 7)
+            if supported_results:
+                result = self._compact_phrase(
+                    self._candidate_result_phrase(
+                        supported_results[0],
+                        supported_context=[
+                            *supported_capabilities,
+                            *supported_methods,
+                        ],
+                    ),
+                    7,
+                )
                 bullets.append(
-                    f"Validated the analysis through {checks}, then reported that "
+                    f"Validated the work by {checks}, then reported "
                     f"{self._lower_first(result)} without overstating the result"
                 )
             else:
                 bullets.append(
-                    f"Validated the project workflow through {checks}, preserving "
-                    "quality checks and limitations for a careful final interpretation"
+                    f"Validated the project workflow by {checks}, preserving quality "
+                    "checks and limitations in the final interpretation"
                 )
         return bullets
 
@@ -2960,44 +3081,82 @@ class ApplicationPackageService:
         company_phrase = f" at {package.company}" if package.company else ""
         supported = self._supported_summary(primary.profile)
         if self._has_substantive_profile(primary.profile):
-            opening = (
-                f"I am applying for the {package.role_title} role{company_phrase}. "
-                f"My strongest projects have required {supported}, along with the "
-                "discipline to test assumptions "
-                "and explain what the evidence does and does not show. That "
-                "combination would let me contribute thoughtfully while continuing "
-                "to grow in the role."
-            )
+            if primary.profile.memory_type == "SKILL_SET":
+                opening = (
+                    f"I am applying for the {package.role_title} role{company_phrase}. "
+                    "The selected record for "
+                    f"{self._contextual_title(primary.profile.canonical_title)} "
+                    "documents "
+                    f"technical experience with {supported}."
+                )
+            else:
+                if len(ranked) == 1:
+                    subject = (
+                        "This project"
+                        if primary.profile.memory_type == "PROJECT"
+                        else "This experience"
+                    )
+                else:
+                    subject = (
+                        "The selected projects"
+                        if all(
+                            item.profile.memory_type == "PROJECT" for item in ranked
+                        )
+                        else "The selected experiences"
+                    )
+                opening = (
+                    f"I am applying for the {package.role_title} role{company_phrase}. "
+                    f"{subject} required {supported}, along with "
+                    "the discipline to test assumptions and explain what the evidence "
+                    "does and does not show. That combination would let me contribute "
+                    "thoughtfully while continuing to grow in the role."
+                )
         else:
             opening = (
                 f"I am applying for the {package.role_title} role{company_phrase}. "
-                f"The current record for {primary.profile.canonical_title} is too "
+                "The current record for "
+                f"{self._contextual_title(primary.profile.canonical_title)} is too "
                 "limited to support stronger method or result claims."
             )
         body_profiles = ranked[:2]
         body = [self._profile_narrative(item.profile) for item in body_profiles]
         if len(body) == 1 and self._has_substantive_profile(primary.profile):
-            skills = self._join(
-                self._unique(
-                    [
-                        *primary.profile.skills_demonstrated[:2],
-                        *primary.profile.methods[:1],
-                    ]
+            if primary.profile.memory_type == "SKILL_SET":
+                body.append(
+                    "The selected record for "
+                    f"{self._contextual_title(primary.profile.canonical_title)} "
+                    f"documents technical experience with {supported}."
                 )
-            )
-            body.append(
-                "This work is relevant beyond its subject matter because it required "
-                f"me to practice {skills or 'careful analysis and evidence review'}. "
-                "I would bring the same measured approach "
-                f"to the day-to-day responsibilities of the {package.role_title} role."
-            )
+            else:
+                methods = self._profile_supported_values(
+                    primary.profile, primary.profile.methods
+                )
+                capabilities = self._profile_supported_capabilities(primary.profile)
+                habit_anchor = (
+                    methods[0]
+                    if methods
+                    else self._candidate_capability_phrase(capabilities[0])
+                    if capabilities
+                    else "the supported work"
+                )
+                body.append(
+                    f"More broadly, working through {habit_anchor} reinforced the "
+                    "habit of keeping the final interpretation grounded in evidence "
+                    "and explaining the result without overstating it or extending "
+                    "it beyond the evidence. I would bring the same measured "
+                    "approach to the day-to-day "
+                    f"responsibilities of the {package.role_title} role."
+                )
         elif len(body) == 1:
-            body.append("The current project record is sparse.")
+            body.append(
+                "I have limited this letter to the selected context and have not "
+                "made specific capability, method, project, or result claims."
+            )
         if self._has_substantive_profile(primary.profile):
             closing = (
-                "I would welcome the opportunity to discuss how a careful, "
-                f"evidence-aware approach could support the {package.role_title} "
-                "team. Thank you for your time and consideration."
+                "I would welcome the opportunity to discuss the responsibilities of "
+                "this role and consider how a careful, evidence-aware approach could "
+                "contribute. Thank you for your time and consideration."
             )
         else:
             closing = "Thank you for considering my application."
@@ -3061,44 +3220,102 @@ class ApplicationPackageService:
         )
 
     def _profile_narrative(self, profile: CompiledCareerMemoryProfile) -> str:
+        if not self._has_substantive_profile(profile):
+            supported_inputs = self._profile_supported_values(
+                profile, profile.data_or_inputs
+            )
+            if self._profile_has_claim_support(profile) and supported_inputs:
+                return (
+                    "The selected record for "
+                    f"{self._contextual_title(profile.canonical_title)} is limited "
+                    "context: its current source detail names "
+                    f"{self._join(supported_inputs[:3])}, but does not support "
+                    "specific capability, method, project, or result claims."
+                )
+            return (
+                "The selected record for "
+                f"{self._contextual_title(profile.canonical_title)} provides only "
+                "limited "
+                "context without direct source proof for specific capability, "
+                "method, project, or result claims."
+            )
+
         sentences: list[str] = []
-        if profile.research_question_or_problem:
+        supported_problem = self._profile_supported_values(
+            profile, [profile.research_question_or_problem or ""]
+        )
+        supported_capabilities = self._profile_supported_capabilities(profile)
+        supported_methods = self._profile_supported_values(profile, profile.methods)
+        supported_inputs = self._profile_supported_values(
+            profile, profile.data_or_inputs
+        )
+        supported_results = self._profile_supported_values(
+            profile, profile.findings_or_results
+        )
+        supported_limitations = self._profile_supported_values(
+            profile, profile.limitations
+        )
+        if supported_problem:
             sentences.append(
-                f"In my {profile.canonical_title}, I investigated "
-                f"{self._problem_phrase(profile.research_question_or_problem)}"
+                f"In {self._contextual_title(profile.canonical_title)}, I investigated "
+                f"{self._problem_phrase(supported_problem[0])}"
             )
-        else:
+        elif profile.memory_type == "SKILL_SET" and supported_capabilities:
             sentences.append(
-                f"My {profile.canonical_title} gave me a concrete project through "
-                "which to practice careful analysis"
+                "My technical experience includes "
+                + self._join(supported_capabilities[:4])
             )
-        if profile.methods:
-            method = self._join(profile.methods[:2])
-            if profile.data_or_inputs:
+        elif supported_methods:
+            sentences.append(
+                f"In {self._contextual_title(profile.canonical_title)}, I used "
+                f"{self._join(supported_methods[:2])}"
+            )
+        elif supported_inputs:
+            sentences.append(
+                f"My {profile.canonical_title} involved "
+                f"{self._join(supported_inputs[:2])}"
+            )
+        if supported_methods:
+            method = self._join(supported_methods[:2])
+            if supported_inputs:
                 sentences.append(
                     f"I built the workflow around {method} using "
-                    f"{self._join(profile.data_or_inputs[:2])}, selecting only the "
+                    f"{self._join(supported_inputs[:2])}, selecting only the "
                     "steps needed to answer the central question"
                 )
             else:
                 sentences.append(
                     f"I used {method} as the core of a focused analytical workflow"
                 )
-        if profile.findings_or_results:
-            sentences.append(
-                "The analysis showed that "
-                + self._lower_first(profile.findings_or_results[0])
+        if supported_results:
+            source_result = supported_results[0]
+            result = self._candidate_result_phrase(
+                source_result,
+                supported_context=[*supported_capabilities, *supported_methods],
             )
-        if profile.limitations:
+            if result:
+                connector = (
+                    "The analysis indicated "
+                    if result != self._lower_first(source_result)
+                    else "The analysis showed that "
+                )
+                sentences.append(connector + result)
+        if supported_limitations:
             sentences.append(
                 "I treated "
-                + self._join(profile.limitations[:1])
+                + self._join(supported_limitations[:1])
                 + " as a constraint on the conclusion and communicated it directly"
             )
-        elif profile.skills_demonstrated:
+        elif supported_capabilities and profile.memory_type != "SKILL_SET":
+            capabilities = self._join(
+                [
+                    self._candidate_capability_phrase(value)
+                    for value in supported_capabilities[:2]
+                ]
+            )
             sentences.append(
-                "The project strengthened my ability to "
-                + self._lower_first(self._join(profile.skills_demonstrated[:2]))
+                "The project gave me experience with "
+                + capabilities
                 + " while keeping the final explanation accessible"
             )
         return " ".join(self._sentence(item) for item in sentences)
@@ -3140,8 +3357,10 @@ class ApplicationPackageService:
         emphasis = self._unique(
             [
                 primary.target_reason,
-                *primary.profile.skills_demonstrated[:4],
-                *primary.profile.methods[:3],
+                *self._profile_supported_capabilities(primary.profile)[:4],
+                *self._profile_supported_values(
+                    primary.profile, primary.profile.methods
+                )[:3],
             ]
         )
         do_not_claim = self._unique(
@@ -3194,7 +3413,9 @@ class ApplicationPackageService:
             if self._is_motivation_question(question):
                 answer = (
                     f"I am interested in the {package.role_title} role. A relevant "
-                    f"example is {profile.canonical_title}, where I practiced "
+                    "example is "
+                    f"{self._contextual_title(profile.canonical_title)}, where I "
+                    "practiced "
                     f"{technical}."
                 )
                 answer_trace = [target_trace, *trace]
@@ -3212,12 +3433,14 @@ class ApplicationPackageService:
                 answer_trace = trace
             elif any(token in lowered for token in ("technical", "skill", "tool")):
                 answer = (
-                    f"I developed {technical} through {profile.canonical_title}."
+                    f"I developed {technical} through "
+                    f"{self._contextual_title(profile.canonical_title)}."
                 )
                 answer_trace = trace
             else:
                 answer = (
-                    f"In {profile.canonical_title}, {self._lower_first(fit_text)}"
+                    f"In {self._contextual_title(profile.canonical_title)}, "
+                    f"{self._lower_first(fit_text)}"
                 )
                 answer_trace = trace
             snippets.append(
@@ -3246,17 +3469,25 @@ class ApplicationPackageService:
         self,
         profile: CompiledCareerMemoryProfile,
     ) -> str:
-        if profile.limitations:
+        limitations = self._profile_supported_values(profile, profile.limitations)
+        workflow_steps = self._profile_supported_values(
+            profile, profile.workflow_steps
+        )
+        methods = self._profile_supported_values(profile, profile.methods)
+        if limitations:
             return (
-                f"In {profile.canonical_title}, I accounted for "
-                f"{self._join(profile.limitations[:2])} and kept that limitation "
+                f"In {self._contextual_title(profile.canonical_title)}, I accounted "
+                "for "
+                f"{self._join(limitations[:2])} and kept that limitation "
                 "visible in the interpretation."
             )
-        if profile.workflow_steps or profile.methods:
+        if workflow_steps or methods:
             workflow = self._lower_first(
-                self._join_action_steps((profile.workflow_steps or profile.methods)[:3])
+                self._join_action_steps((workflow_steps or methods)[:3])
             )
-            return f"In {profile.canonical_title}, I {workflow}."
+            return (
+                f"In {self._contextual_title(profile.canonical_title)}, I {workflow}."
+            )
         return self._profile_evidence_summary(profile)
 
     @staticmethod
@@ -3518,7 +3749,8 @@ class ApplicationPackageService:
             supporting = [
                 item
                 for item in ranked
-                if self._patterns_supported(
+                if self._profile_has_claim_support(item.profile)
+                and self._patterns_supported(
                     self._profile_capability_text(item.profile), patterns
                 )
             ]
@@ -4046,24 +4278,149 @@ class ApplicationPackageService:
         return _RankedProfile(profile=profile, score=score, target_reason=reason)
 
     def _supported_summary(self, profile: CompiledCareerMemoryProfile) -> str:
+        if not self._profile_has_claim_support(profile):
+            return "limited memory context without direct source proof"
         values = self._unique(
             [
-                *profile.skills_demonstrated[:4],
-                *profile.methods[:4],
-                *profile.tools[:2],
+                *self._profile_supported_capabilities(profile)[:4],
+                *self._profile_supported_values(profile, profile.methods)[:4],
             ]
         )
         if values:
-            return self._join(values[:5])
+            return self._join(
+                [self._candidate_capability_phrase(value) for value in values[:5]]
+            )
         return "limited project context"
 
-    @staticmethod
-    def _has_substantive_profile(profile: CompiledCareerMemoryProfile) -> bool:
+    @classmethod
+    def _has_substantive_profile(cls, profile: CompiledCareerMemoryProfile) -> bool:
         return bool(
-            profile.skills_demonstrated
-            or profile.methods
-            or profile.workflow_steps
-            or profile.resume_bullet_claims
+            cls._profile_has_claim_support(profile)
+            and (
+                cls._profile_supported_capabilities(profile)
+                or cls._profile_supported_values(profile, profile.methods)
+                or cls._profile_supported_values(profile, profile.workflow_steps)
+                or cls._profile_supported_values(
+                    profile, profile.resume_bullet_claims
+                )
+            )
+        )
+
+    @staticmethod
+    def _profile_has_claim_support(profile: CompiledCareerMemoryProfile) -> bool:
+        """Return whether the profile has any approved factual claim support."""
+
+        return any(
+            item.kind
+            in {
+                CompiledEvidenceKind.CANONICAL_EVIDENCE,
+                CompiledEvidenceKind.APPROVED_ENRICHMENT,
+            }
+            for item in profile.evidence_used
+        )
+
+    @staticmethod
+    def _profile_claim_support_excerpts(
+        profile: CompiledCareerMemoryProfile,
+    ) -> list[str]:
+        return [
+            " ".join((item.excerpt or "").split()).strip()
+            for item in profile.evidence_used
+            if item.kind
+            in {
+                CompiledEvidenceKind.CANONICAL_EVIDENCE,
+                CompiledEvidenceKind.APPROVED_ENRICHMENT,
+            }
+            and (item.excerpt or "").strip()
+        ]
+
+    @classmethod
+    def _profile_value_has_claim_support(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        value: str,
+    ) -> bool:
+        """Require each exposed profile value to match approved source material."""
+
+        rendered = " ".join(value.split()).strip().rstrip(".")
+        if not rendered:
+            return False
+        candidate_values = cls._unique(
+            [rendered, cls._candidate_result_phrase(rendered)]
+        )
+        excerpts = cls._profile_claim_support_excerpts(profile)
+        if any(
+            re.search(cls._literal_pattern(candidate), excerpt, re.I)
+            for candidate in candidate_values
+            for excerpt in excerpts
+            if candidate
+        ):
+            return True
+
+        candidate_terms = cls._profile_support_terms(candidate_values[-1])
+        if not candidate_terms:
+            return False
+        support_terms = cls._profile_support_terms(" ".join(excerpts))
+        overlap = candidate_terms & support_terms
+        return len(overlap) >= 2 and len(overlap) / len(candidate_terms) >= 0.6
+
+    @classmethod
+    def _profile_support_terms(cls, value: str) -> set[str]:
+        aliases = {
+            "categorization": "categorize",
+            "categorized": "categorize",
+            "categorizing": "categorize",
+            "inspection": "inspect",
+            "inspected": "inspect",
+            "inspecting": "inspect",
+            "manually": "manual",
+            "organization": "organize",
+            "organized": "organize",
+            "organizing": "organize",
+            "reviewed": "review",
+            "reviewing": "review",
+        }
+        normalized: set[str] = set()
+        for token in cls._terms(value.replace("-", " ")):
+            rendered = aliases.get(token, token)
+            if rendered == token and len(token) > 4:
+                if token.endswith("ies"):
+                    rendered = f"{token[:-3]}y"
+                elif token.endswith("ing"):
+                    rendered = token[:-3]
+                elif token.endswith("ed"):
+                    rendered = token[:-2]
+                elif token.endswith("s"):
+                    rendered = token[:-1]
+            normalized.add(rendered)
+        return normalized
+
+    @classmethod
+    def _profile_supported_values(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+        values: Iterable[str],
+    ) -> list[str]:
+        return cls._unique(
+            value
+            for value in values
+            if value and cls._profile_value_has_claim_support(profile, value)
+        )
+
+    @classmethod
+    def _profile_supported_capabilities(
+        cls,
+        profile: CompiledCareerMemoryProfile,
+    ) -> list[str]:
+        support_text = " ".join(cls._profile_claim_support_excerpts(profile))
+        return cls._unique(
+            value
+            for value in [*profile.skills_demonstrated, *profile.tools]
+            if cls._literal_in_text(value, support_text)
+            or (
+                len(cls._profile_support_terms(value)) >= 2
+                and cls._profile_value_has_claim_support(profile, value)
+            )
         )
 
     @classmethod
@@ -4111,13 +4468,55 @@ class ApplicationPackageService:
         self,
         profile: CompiledCareerMemoryProfile,
     ) -> str:
+        if not self._profile_has_claim_support(profile):
+            return (
+                f"{profile.canonical_title} is selected only for limited use as "
+                "context; its current record does not support role-specific "
+                "capability, method, project, or result claims without direct "
+                "source proof."
+            )
+        if not self._has_substantive_profile(profile):
+            inputs = (
+                self._join(
+                    self._profile_supported_values(
+                        profile, profile.data_or_inputs
+                    )[:3]
+                )
+                or "limited source detail"
+            )
+            return (
+                f"{profile.canonical_title} is limited context: the current source "
+                f"detail names {inputs}, but does not support specific capability, "
+                "method, project, or result claims."
+            )
         parts: list[str] = []
-        if profile.data_or_inputs:
-            parts.append(self._join(profile.data_or_inputs[:3]))
-        if profile.methods:
-            parts.append(self._join(profile.methods[:4]))
-        if profile.findings_or_results:
-            parts.append(profile.findings_or_results[0])
+        supported_capabilities = self._profile_supported_capabilities(profile)
+        supported_inputs = self._profile_supported_values(
+            profile, profile.data_or_inputs
+        )
+        supported_methods = self._profile_supported_values(profile, profile.methods)
+        supported_results = self._profile_supported_values(
+            profile, profile.findings_or_results
+        )
+        if profile.memory_type == "SKILL_SET" and supported_capabilities:
+            parts.append(
+                "documented technical experience with "
+                + self._join(supported_capabilities[:4])
+            )
+        if supported_inputs:
+            parts.append(self._join(supported_inputs[:3]))
+        if supported_methods:
+            parts.append(self._join(supported_methods[:4]))
+        if supported_results:
+            parts.append(
+                self._candidate_result_phrase(
+                    supported_results[0],
+                    supported_context=[
+                        *supported_capabilities,
+                        *supported_methods,
+                    ],
+                )
+            )
         detail = "; ".join(parts) or "project context"
         return f"{profile.canonical_title} — {detail}."
 
@@ -4557,6 +4956,10 @@ class ApplicationPackageService:
             )
             if phrase in lowered
         ]
+        invalid_grammar = cls._invalid_candidate_grammar(prose)
+        repeated_capability_chain = cls._has_repeated_capability_chain(
+            outputs.cover_letter.full_text
+        )
         long_bullets = [item for item in bullets if len(item.split()) > 38]
         comma_chains = [
             sentence
@@ -4589,6 +4992,15 @@ class ApplicationPackageService:
         notes: list[str] = []
         if mechanical:
             notes.append("Replace mechanical source-field language with natural prose.")
+        if invalid_grammar:
+            notes.append(
+                "Correct invalid grammar in article, title, or verb constructions."
+            )
+        if repeated_capability_chain:
+            notes.append(
+                "Remove repeated capability chains from adjacent cover-letter "
+                "paragraphs."
+            )
         if long_bullets:
             notes.append("Shorten resume bullets to one central idea.")
         if comma_chains:
@@ -4606,9 +5018,13 @@ class ApplicationPackageService:
         primary_issue = (
             notes[0] if notes else "No material writing-quality issue detected."
         )
-        natural = "Needs attention" if mechanical else "Strong"
+        natural = "Needs attention" if mechanical or invalid_grammar else "Strong"
         concise = "Needs attention" if long_bullets or comma_chains else "Good"
-        readable = "Needs attention" if mechanical or comma_chains else "Strong"
+        readable = (
+            "Needs attention"
+            if mechanical or invalid_grammar or comma_chains
+            else "Strong"
+        )
         genericness = (
             "High" if generic_markers > 4 else "Moderate" if generic_markers else "Low"
         )
@@ -4620,7 +5036,13 @@ class ApplicationPackageService:
             concision=concise,
             recruiter_readability=("Needs attention" if warning_overload else readable),
             genericness=genericness,
-            repetition="Moderate" if repeated_titles else "Low",
+            repetition=(
+                "High"
+                if repeated_capability_chain
+                else "Moderate"
+                if repeated_titles
+                else "Low"
+            ),
             overclaim_risk=(
                 "Review"
                 if any("Unverified" in item for item in outputs.unsupported_claims)
@@ -5102,15 +5524,18 @@ class ApplicationPackageService:
     ) -> str:
         return cls._positive_text(
             [
-                *profile.data_or_inputs,
-                *profile.methods,
-                *profile.tools,
-                *profile.workflow_steps,
-                *profile.findings_or_results,
-                *profile.outputs,
-                *profile.skills_demonstrated,
-                *profile.proof_claims,
-                *profile.resume_bullet_claims,
+                *cls._profile_supported_values(profile, profile.data_or_inputs),
+                *cls._profile_supported_values(profile, profile.methods),
+                *cls._profile_supported_capabilities(profile),
+                *cls._profile_supported_values(profile, profile.workflow_steps),
+                *cls._profile_supported_values(
+                    profile, profile.findings_or_results
+                ),
+                *cls._profile_supported_values(profile, profile.outputs),
+                *cls._profile_supported_values(profile, profile.proof_claims),
+                *cls._profile_supported_values(
+                    profile, profile.resume_bullet_claims
+                ),
             ]
         )
 
@@ -5251,9 +5676,11 @@ class ApplicationPackageService:
     def _display_name(role_title: str, company: str | None) -> str:
         return f"{role_title} — {company}" if company else role_title
 
-    @staticmethod
-    def _has_quantified_result(profile: CompiledCareerMemoryProfile) -> bool:
-        result_text = " ".join(profile.findings_or_results)
+    @classmethod
+    def _has_quantified_result(cls, profile: CompiledCareerMemoryProfile) -> bool:
+        result_text = " ".join(
+            cls._profile_supported_values(profile, profile.findings_or_results)
+        )
         return bool(
             re.search(
                 r"(?<!\w)\d+(?:\.\d+)?\s*(?:%|percent\b|x\b|samples?\b|"
@@ -5298,8 +5725,46 @@ class ApplicationPackageService:
         cleaned = " ".join(value.split()).strip().rstrip(".")
         return cleaned[:1].lower() + cleaned[1:] if cleaned else cleaned
 
+    @staticmethod
+    def _contextual_title(value: str) -> str:
+        """Render a title after a preposition without duplicating its article."""
+
+        cleaned = " ".join(value.split()).strip()
+        return re.sub(
+            r"^(?:the|a|an)\b",
+            lambda match: match.group(0).casefold(),
+            cleaned,
+            count=1,
+            flags=re.I,
+        )
+
+    @staticmethod
+    def _candidate_capability_phrase(value: str) -> str:
+        """Add a determiner when a supported capability is a singular workflow."""
+
+        cleaned = " ".join(value.split()).strip().rstrip(".")
+        if re.search(r"\bworkflow$", cleaned, re.I) and not re.match(
+            r"^(?:a|an|the|this|that|my|our)\b", cleaned, re.I
+        ):
+            return f"a {cleaned}"
+        return cleaned
+
+    @staticmethod
+    def _candidate_source_phrase(value: str) -> str:
+        """Resolve ambiguous source labels without adding a new factual object."""
+
+        cleaned = " ".join(value.split()).strip()
+        return re.sub(
+            r"\bsource\s+or\s+detection\s+candidates\b",
+            "detection candidates",
+            cleaned,
+            flags=re.I,
+        )
+
     @classmethod
-    def _problem_phrase(cls, value: str) -> str:
+    def _problem_phrase(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            return ""
         cleaned = " ".join(value.split()).strip().rstrip(".")
         cleaned = re.sub(
             r"^(?:the\s+)?project\s+(?:(?:focused|focuses)\s+on\s+|tested\s+whether\s+)",
@@ -5307,6 +5772,39 @@ class ApplicationPackageService:
             cleaned,
             flags=re.I,
         )
+        if not cleaned:
+            return ""
+        return cls._lower_first(cleaned)
+
+    @classmethod
+    def _candidate_result_phrase(
+        cls,
+        value: str,
+        *,
+        supported_context: Iterable[str] = (),
+    ) -> str:
+        """Remove compiler provenance wrappers from candidate-facing results."""
+
+        cleaned = " ".join(value.split()).strip().rstrip(".")
+        cleaned = re.sub(
+            r"^(?:(?:the\s+)?approved\s+evidence\s+reports?|"
+            r"the\s+documented\s+result\s+was)\s+",
+            "",
+            cleaned,
+            flags=re.I,
+        )
+        alternative_efficiency = re.fullmatch(
+            r"improved\s+([a-z][\w-]*)\s+or\s+([a-z][\w-]*)\s+efficiency",
+            cleaned,
+            re.I,
+        )
+        context = " ".join(supported_context)
+        if alternative_efficiency and all(
+            cls._literal_in_text(term, context)
+            for term in alternative_efficiency.groups()
+        ):
+            first, second = alternative_efficiency.groups()
+            cleaned = f"improved efficiency in {first} and {second}"
         return cls._lower_first(cleaned)
 
     @staticmethod
@@ -5315,7 +5813,111 @@ class ApplicationPackageService:
         words = cleaned.split()
         if len(words) <= word_limit:
             return cleaned
-        return " ".join(words[:word_limit]).rstrip(",;:")
+        compacted = " ".join(words[:word_limit]).rstrip(",;:")
+        return re.sub(
+            r"\s+\b(?:and|or|of|to|for|with|through|around|using|as)\b$",
+            "",
+            compacted,
+            flags=re.I,
+        )
+
+    @classmethod
+    def _gerund_action_phrase(cls, value: str) -> str:
+        """Render a documented workflow step naturally after the word ``by``."""
+
+        rendered = " ".join(value.split()).strip().rstrip(".")
+        if not rendered:
+            return ""
+        rendered = cls._candidate_source_phrase(rendered)
+        trailing_adverb = re.search(r"\s+(manually|carefully)$", rendered, re.I)
+        adverb = trailing_adverb.group(1).casefold() if trailing_adverb else ""
+        if trailing_adverb:
+            rendered = rendered[: trailing_adverb.start()].rstrip()
+        first, separator, remainder = rendered.partition(" ")
+        gerunds = {
+            "analyzed": "analyzing",
+            "applied": "applying",
+            "built": "building",
+            "checked": "checking",
+            "compared": "comparing",
+            "created": "creating",
+            "documented": "documenting",
+            "inspected": "inspecting",
+            "reviewed": "reviewing",
+            "used": "using",
+            "validated": "validating",
+        }
+        action = gerunds.get(first.casefold(), cls._lower_first(first))
+        phrase = f"{action}{separator}{remainder}".strip()
+        return f"{adverb} {phrase}".strip() if adverb else phrase
+
+    @staticmethod
+    def _invalid_candidate_grammar(value: str) -> list[str]:
+        patterns = {
+            "possessive before title article": r"\bmy\s+(?:the|a|an)\b",
+            "gerund after ability to": r"\bability\s+to\s+[a-z][\w-]*ing\b",
+            "missing workflow article": (
+                r"\brequir(?:e|es|ed|ing)\s+"
+                r"(?!(?:a|an|the)\s+)(?:[a-z][\w-]*\s+){1,5}workflow\b"
+            ),
+        }
+        return [
+            label
+            for label, pattern in patterns.items()
+            if re.search(pattern, value, re.I)
+        ]
+
+    @classmethod
+    def _has_repeated_capability_chain(cls, value: str) -> bool:
+        """Detect a repeated multi-item phrase in adjacent cover paragraphs."""
+
+        paragraphs = [
+            paragraph
+            for paragraph in re.split(r"\n\s*\n", value.casefold())
+            if paragraph.strip()
+        ]
+        stop_words = {
+            "a",
+            "an",
+            "and",
+            "as",
+            "at",
+            "by",
+            "for",
+            "from",
+            "i",
+            "in",
+            "it",
+            "my",
+            "of",
+            "on",
+            "or",
+            "the",
+            "this",
+            "to",
+            "with",
+            "would",
+        }
+        phrase_size = 8
+        tokenized = [
+            re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", paragraph)
+            for paragraph in paragraphs
+        ]
+        for left, right in zip(tokenized, tokenized[1:], strict=False):
+            if len(left) < phrase_size or len(right) < phrase_size:
+                continue
+            left_phrases = {
+                tuple(left[index : index + phrase_size])
+                for index in range(len(left) - phrase_size + 1)
+            }
+            for index in range(len(right) - phrase_size + 1):
+                phrase = tuple(right[index : index + phrase_size])
+                if (
+                    phrase in left_phrases
+                    and sum(token not in stop_words for token in phrase) >= 4
+                ):
+                    return True
+        return False
 
     @staticmethod
     def _contains_mechanical_phrase(value: str) -> bool:
@@ -5379,8 +5981,9 @@ class ApplicationPackageService:
     def _join_action_steps(cls, values: list[str]) -> str:
         if not values:
             return ""
+        rendered = [cls._candidate_source_phrase(value) for value in values]
         return cls._join(
-            [values[0], *(cls._lower_first(value) for value in values[1:])]
+            [rendered[0], *(cls._lower_first(value) for value in rendered[1:])]
         )
 
     @staticmethod

@@ -10,6 +10,7 @@ import {
   applicationPackageInputFingerprint,
   applicationPackageStatusLabel,
   applicationPackageVersionInput,
+  applicationOpportunityRoleTitle,
   applicationWarningSeverityLabel,
   applicationProviderLabel,
   defaultRecommendedMemoryIds,
@@ -79,6 +80,23 @@ test("package list parsing and normalization mirror the backend target contract"
       ],
       selected_memory_ids: ["gas-memory", "unicorn-memory"],
     },
+  );
+});
+
+test("saved opportunity titles remain the exact package role instead of the broad classifier", () => {
+  assert.equal(
+    applicationOpportunityRoleTitle({
+      title: "  Data   Analytics Intern  ",
+      detected_role_type: "Data",
+    }),
+    "Data Analytics Intern",
+  );
+  assert.equal(
+    normalizeApplicationPackageInput({
+      ...baseInput,
+      roleTitle: "  Data   Analytics Intern  ",
+    }).role_title,
+    "Data Analytics Intern",
   );
 });
 

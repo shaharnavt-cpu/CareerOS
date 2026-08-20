@@ -1233,7 +1233,11 @@ class CareerMemoryCompiler:
     def _structured_excerpt(cls, fields: dict[str, Any]) -> str:
         values = cls._factual_field_text(fields)
         rendered = "; ".join(cls._unique(values))
-        return rendered if len(rendered) <= 500 else f"{rendered[:497].rstrip()}..."
+        return (
+            rendered
+            if len(rendered) <= 3000
+            else f"{rendered[:2997].rstrip()}..."
+        )
 
     @classmethod
     def _missing_sections(

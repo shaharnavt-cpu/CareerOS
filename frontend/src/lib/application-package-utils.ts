@@ -11,6 +11,7 @@ import type {
   ApplicationWarningSeverity,
   ResumeBulletGroup,
 } from "./application-package-api";
+import type { ApplicationOpportunity } from "./application-api";
 
 export type ApplicationPackageInput = {
   opportunityId?: string | null;
@@ -81,7 +82,7 @@ export function normalizeApplicationPackageInput(
 ): NormalizedApplicationPackageInput {
   return {
     opportunity_id: nullableText(input.opportunityId),
-    role_title: input.roleTitle.trim(),
+    role_title: normalizeInlineText(input.roleTitle),
     company: nullableText(input.company),
     location: nullableText(input.location),
     job_type: nullableText(input.jobType),
@@ -101,6 +102,15 @@ export function normalizeApplicationPackageInput(
     })),
     selected_memory_ids: input.selectedMemoryIds.map((id) => id.trim()),
   };
+}
+
+export function applicationOpportunityRoleTitle(
+  opportunity: Pick<ApplicationOpportunity, "title" | "detected_role_type">,
+): string {
+  return (
+    normalizeInlineText(opportunity.title) ||
+    normalizeInlineText(opportunity.detected_role_type ?? "")
+  );
 }
 
 export function applicationPackageInputFingerprint(
@@ -293,6 +303,10 @@ function normalizeList(values: string[]): string[] {
     result.push(cleaned);
   }
   return result;
+}
+
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function normalizeIdentifiers(values: string[]): string[] {

@@ -40,6 +40,7 @@ import {
   applicationPackageInputFingerprint,
   applicationPackageStatusLabel,
   applicationPackageVersionInput,
+  applicationOpportunityRoleTitle,
   applicationWarningSeverityLabel,
   defaultRecommendedMemoryIds,
   moveSelectedMemory,
@@ -3255,7 +3256,7 @@ function targetFromOpportunity(
 ): TargetForm {
   return {
     opportunityId: opportunity.id,
-    roleTitle: opportunity.detected_role_type?.trim() || opportunity.title,
+    roleTitle: applicationOpportunityRoleTitle(opportunity),
     company: opportunity.organization ?? "",
     location: "",
     jobType: "",
