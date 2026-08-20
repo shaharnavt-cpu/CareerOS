@@ -10,6 +10,11 @@ const links = [
   { href: "/review", label: "Review", key: "review" },
   { href: "/stories", label: "Stories", key: "stories" },
   { href: "/applications", label: "Applications", key: "applications" },
+  {
+    href: "/application-packages",
+    label: "Application Packages",
+    key: "application-packages",
+  },
   { href: "/onboarding", label: "Listen", key: "onboarding" },
 ] as const;
 

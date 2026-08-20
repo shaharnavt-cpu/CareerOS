@@ -2,6 +2,7 @@
 
 import uuid
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.schemas.knowledge import (
@@ -43,13 +44,22 @@ class ReviewedCareerMemoryService:
             if request.decision is ReviewDecision.REJECT
             else DurableReviewStatus.APPROVED
         )
-        proposal = self._reviews.persist_decision(
-            session,
-            result.proposal,
-            review_status,
-            result.canonical_entity_id,
-            self._user_id,
-        )
+        try:
+            proposal = self._reviews.persist_decision(
+                session,
+                result.proposal,
+                review_status,
+                result.canonical_entity_id,
+                self._user_id,
+            )
+        except OperationalError:
+            session.rollback()
+            if request.decision is not ReviewDecision.REJECT:
+                raise
+            # Rejection never changes canonical Career Memory. Keep that safety
+            # action available during a database outage; durable review history can
+            # be retried later, while approvals continue to fail closed.
+            proposal = result.proposal
         return ProposalReviewResponse(
             proposal=proposal,
             canonical_entity_id=result.canonical_entity_id,

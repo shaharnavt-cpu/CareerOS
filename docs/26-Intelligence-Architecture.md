@@ -13,10 +13,10 @@ Raw Evidence
   -> Approved Canonical Memory
   -> Approved Enrichment
   -> Compiled Memory Profile
-  -> Diagnosis / Proof Artifact / Resume / Cover Letter / Applications
+  -> Diagnosis / Proof Artifact / Application Intelligence / Application Package
 ```
 
-The last three document-oriented consumers are outputs. The durable career
+These downstream consumers are interpretations and outputs. The durable career
 memory and its approved provenance remain the source of truth.
 
 ## The layers
@@ -164,6 +164,87 @@ type, or channel invalidates the visible saved preview. The UI moves to a
 new-draft state and asks the user to generate a new artifact for the selected
 memory instead of showing stale content under a different selection.
 
+## Application packages
+
+The Sprint 14 Application Package Builder compiles every explicitly selected
+approved memory independently, ranks the resulting profiles for a target, and
+creates a structured positioning summary, resume bullets, cover letter,
+answers for explicit application questions, and proof-artifact suggestions. It does not query raw
+records broadly to assemble prose, and it does not use a target posting as a
+career fact.
+
+Application-package persistence deliberately separates a mutable workspace from
+append-only versions:
+
+- the package parent stores the current target fields, selected memory IDs, and
+  `DRAFT`/`READY`/`ARCHIVED` status;
+- every generation, regeneration, and saved edit appends a version containing
+  target and compiled-profile snapshots, outputs, traces, warnings, claim
+  ledger, IDs used, edit metadata, and generator version; and
+- an input fingerprint makes output stale when the target, selection, or
+  current compiled proof changes. Stale output cannot be marked ready or saved
+  as a current edited version, and a latest version with a `BLOCKING` warning
+  cannot be marked ready.
+
+The trace system keeps five roles distinct: direct approved-memory proof,
+direct approved-enrichment proof, inferred role-aware framing backed by that
+proof, strategy-only outcome signals, and relevance-only target context.
+Per-surface claim-ledger entries record factual references, support level,
+strategy references, edit state, and warnings for positioning, bullets, letter
+content, and snippets. Generated claim traces retain every approved direct
+source in the applicable compiled profile.
+
+User edits create another immutable version and are marked for review. The
+service accepts nested output payloads for compatibility but merges only allowed
+text; provenance IDs, traces, confidence, and claim metadata stay server-owned.
+Only changed claims become `user_review_required`, and their ledger entries do
+not certify preserved traces with factual IDs. The saved-edit audit compares
+resume wording with its exact memory, detects cross-memory borrowing, ignores
+negated/limitation clauses as support, and emits `BLOCKING` warnings for
+unsupported numbers or recognized capabilities. Audit findings are recomputed
+so corrected edits can clear them.
+
+## Sprint 14.1 writing-provider boundary
+
+Sprint 14.1 inserts a typed provider boundary after approved evidence has been
+compiled, filtered, semantically ranked, and narrowed to the best 2-4 memories.
+The provider returns structured job understanding, coverage, claim plans,
+drafts, evidence references, and concise review notes. Persistence still occurs
+only after CareerOS revalidates claims, tools, metrics, memory boundaries,
+strategy labels, target-only context, and excluded-record rules.
+
+`local-deterministic` and `openai` implement the same contract. The OpenAI
+adapter uses the Responses API, strict Structured Outputs, `store=false`, and
+server-held configuration. This seam can accept a future Anthropic provider
+without letting any provider own compilation, policy, readiness, or versioning.
+Provider failure cannot remove prior versions or create an empty version.
+
+The data-policy check is also server-owned. `private` allows minimized approved
+user context for a suitable non-shared project. `demo-shared` admits only seeded
+or explicitly marked demo profiles and rejects obvious identifiers before a
+request. See [29-GPT-5.6-Application-Writing-Intelligence.md](29-GPT-5.6-Application-Writing-Intelligence.md)
+and [30-Build-Week-Demo-Data-and-Privacy.md](30-Build-Week-Demo-Data-and-Privacy.md).
+
+### Sprint 14.1.2 question/answer boundary
+
+The writing input contains an ordered `application_questions` list. Each item
+has `question_id`, `question_text`, `required`, optional `maximum_length`,
+optional `response_type`, and `relevant_target_requirement_ids` when applicable.
+The provider therefore never infers an answer count or invents generic prompts.
+Returned application answers map to that list by `question_id`; deterministic
+validation enforces required coverage, known and unique IDs, non-empty required
+answers, and input order. Optional unanswered questions may be absent, and an
+empty question list requires an empty snippet list.
+
+A missing required answer is a structural failure, not a hallucination. It is
+eligible for one targeted provider repair containing only the missing question
+IDs/text, already valid package sections, relevant evidence atoms, prohibited
+claims, and the strict answer schema. Only repaired answers are merged before
+the entire package is validated again; resume and cover-letter sections are not
+regenerated. Unsupported tools, outcomes, or evidence references in a repaired
+answer remain blocked by the unchanged Sprint 14.1.1 factual-claim gate. The
+same `private`/`demo-shared` policy applies to generation and repair.
+
 ## Outcome signals
 
 Outcome feedback may say that an artifact led to an interview, that a framing
@@ -186,24 +267,37 @@ Target job text and role names may change:
 
 They may not add a new job, leadership role, tool, dataset, project method,
 metric, outcome, deployment claim, or conclusion. The same compiled factual
-profile should remain factually stable when the target role changes.
+profile should remain factually stable when the target role changes. Capability
+matching uses positive fields and token boundaries; a limitation such as "no
+AWS was used" is not positive AWS support. Sparse profiles receive gap language,
+not inferred technical capability.
 
-## How Sprint 14 should use this architecture
+## How Sprint 14 uses this architecture
 
-The Resume and Cover Letter Builder should be a consumer of the intelligence
+The Application Package Builder is an implemented consumer of the intelligence
 layer, not a bypass around it:
 
-1. parse target job/application text into relevance context;
-2. select approved memories and compile project profiles for that target;
-3. use existing proof artifacts and diagnosis to choose the strongest safe
-   positioning;
-4. generate claim ingredients and prose only from supported compiled fields;
-5. expose an evidence trace and warnings for each material claim;
-6. let the user edit/review before saving a package snapshot; and
-7. store later feedback as an outcome signal, never as retroactive proof.
+1. target job/application text becomes relevance-only context;
+2. the user explicitly selects approved memories;
+3. the service compiles each exact memory and ranks the approved profiles;
+4. deterministic composition uses supported compiled fields only;
+5. unsupported target requirements become warnings, unsupported claims, and
+   reviewer questions;
+6. direct proof, supported inferred framing, strategy-only signals, and
+   target-only context remain separate in traces, while the claim ledger records
+   the resulting source references, support, edits, and warnings; and
+7. generated, regenerated, and edited states are preserved as immutable package
+   versions without mutating Career Memory.
+
+Existing proof artifacts inform suggestions only: `READY` can become `ATTACH`,
+an unfinished non-archived artifact becomes `REVIEW`, and absence becomes
+`BUILD`. Career Diagnosis is not silently imported as factual content. Later
+package-linked feedback must remain an outcome signal, never retroactive proof.
 
 This preserves the product's advantage: CareerOS remembers and reasons about
-the user's approved work before it writes about it.
+the user's approved work before it writes about it. See
+[28-Application-Package-Builder.md](28-Application-Package-Builder.md) for the
+implemented workflow and API.
 
 ## Non-negotiable implementation rules
 

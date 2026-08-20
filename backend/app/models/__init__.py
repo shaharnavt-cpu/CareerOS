@@ -6,6 +6,10 @@ from app.models.application import (
     ApplicationOpportunity,
     ApplicationQuestion,
 )
+from app.models.application_package import (
+    ApplicationPackage,
+    ApplicationPackageVersion,
+)
 from app.models.career import (
     Achievement,
     Education,
@@ -36,6 +40,8 @@ __all__ = [
     "ApplicationDraft",
     "ApplicationMemoryMatch",
     "ApplicationOpportunity",
+    "ApplicationPackage",
+    "ApplicationPackageVersion",
     "ApplicationQuestion",
     "CanonicalMemoryRecord",
     "CareerFeedbackEvent",

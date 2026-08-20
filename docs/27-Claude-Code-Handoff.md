@@ -2,11 +2,12 @@
 
 ## Purpose
 
-This is the practical starting point for the next implementation task. CareerOS
-already has an approved-memory, enrichment, compiler, diagnosis, proof-artifact,
-and application-intelligence foundation. The next planned feature is the
-reviewed Resume and Cover Letter Builder described in
-[14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md).
+This document was the practical handoff into Sprint 14. The reviewed Resume and
+Cover Letter Builder is now implemented; use [00-Current-State.md](00-Current-State.md)
+for the current product boundary and
+[28-Application-Package-Builder.md](28-Application-Package-Builder.md) for its
+delivered behavior. The Sprint 14 delivery notes below remain as historical
+implementation context, not as the next planned feature.
 
 Read these documents before changing product behavior:
 
@@ -15,6 +16,9 @@ Read these documents before changing product behavior:
 3. [26-Intelligence-Architecture.md](26-Intelligence-Architecture.md)
 4. [13.1-Career-Memory-Compiler-Proof-Intelligence.md](specs/13.1-Career-Memory-Compiler-Proof-Intelligence.md)
 5. [14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md)
+6. [28-Application-Package-Builder.md](28-Application-Package-Builder.md)
+7. [29-GPT-5.6-Application-Writing-Intelligence.md](29-GPT-5.6-Application-Writing-Intelligence.md)
+8. [30-Build-Week-Demo-Data-and-Privacy.md](30-Build-Week-Demo-Data-and-Privacy.md)
 
 ## Repository orientation
 
@@ -187,10 +191,10 @@ temporary smoke-test output.
 10. **Expose uncertainty.** Missing evidence should produce a gap, warning, or
     question, never plausible invented prose.
 
-## Recommended Sprint 14 delivery shape
+## Historical Sprint 14 delivery shape (completed)
 
-Treat [the Sprint 14 spec](specs/14-Resume-Cover-Letter-Builder.md) as the
-source of scope. Deliver vertical slices in this order:
+The implementation followed [the Sprint 14 spec](specs/14-Resume-Cover-Letter-Builder.md)
+as its source of scope and delivered these vertical slices:
 
 1. define package and immutable-version contracts/migrations;
 2. build a deterministic claim-selection and provenance service using compiled
@@ -201,9 +205,56 @@ source of scope. Deliver vertical slices in this order:
    outcome-signal boundaries;
 6. run the full verification sequence and one realistic local smoke path.
 
-Do not start with templates, PDF polish, model integrations, job-board
-automation, or browser autofill. They are consumers of a trustworthy package,
-not substitutes for it.
+Templates, PDF polish, additional provider integrations, job-board automation,
+and browser autofill remain downstream consumers of the trustworthy package
+rather than substitutes for it.
+
+## Sprint 14.1 provider and live-smoke handoff
+
+Application writing is independently configured from listening/reasoning.
+Normal development uses `APPLICATION_WRITER_PROVIDER=local-deterministic`,
+`APPLICATION_WRITER_DATA_POLICY=private`, and no key. Mocked OpenAI tests must
+also pass without a key.
+
+For the one approved live smoke, the user manually enters `OPENAI_API_KEY` in
+the untracked `backend/.env` or process environment and sets the following.
+The backend reads the repository-root `.env` first and backend-specific
+`backend/.env` second, so the latter overrides duplicate values:
+
+```dotenv
+APPLICATION_WRITER_PROVIDER=openai
+APPLICATION_WRITER_DATA_POLICY=demo-shared
+OPENAI_APPLICATION_WRITER_MODEL=gpt-5.6-terra
+OPENAI_APPLICATION_REVIEW_MODEL=
+OPENAI_APPLICATION_ENABLE_REVIEW_PASS=false
+OPENAI_APPLICATION_TIMEOUT_SECONDS=120
+OPENAI_APPLICATION_MAX_OUTPUT_TOKENS=6000
+OPENAI_APPLICATION_MAX_INPUT_CHARACTERS=80000
+OPENAI_APPLICATION_MAX_SELECTED_MEMORIES=4
+OPENAI_APPLICATION_REASONING_EFFORT=medium
+RUN_LIVE_OPENAI_TESTS=true
+```
+
+Never request, inspect, echo, or commit the key. After user confirmation, run
+exactly once:
+
+```cmd
+cd /d C:\path\to\CareerOS\backend
+.\.venv\Scripts\python.exe -m scripts.live_application_writer_smoke
+```
+
+The shared demo policy requires the fictional Maya Chen fixture and rejects
+personal profiles/identifiers before the request. Sol review is a separate,
+explicitly approved option; it remains disabled for the cost-safe Terra smoke.
+
+Sprint 14.1.2 adds ordered structured `application_questions` and exact answer
+mapping by `question_id`; do not restore a global minimum answer count. Required
+questions need one non-empty answer, optional unanswered questions may be
+omitted, and zero questions requires zero snippets. One missing-answer repair
+may request and merge only answers while preserving valid package sections,
+then all structural and factual checks run again. The claim validator and
+`private`/`demo-shared` boundary are unchanged. No live provider request was run
+for Sprint 14.1.2; live OpenAI acceptance remains pending.
 
 ## Handoff checklist
 

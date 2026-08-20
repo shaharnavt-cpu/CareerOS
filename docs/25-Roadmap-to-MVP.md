@@ -29,7 +29,8 @@ CareerOS is personally useful when Arnav can:
 4. generate a tailored resume-bullet set, cover-letter draft, and application
    positioning summary with evidence traces and warnings;
 5. review/edit the package before copying or exporting it; and
-6. save what was used for the application and record what happened afterward.
+6. save what was used for the application and, in a later tracker, connect the
+   exact package version to what happened afterward.
 
 Personal MVP does not require browser autofill, external integrations, public
 hosting, or automated submission.
@@ -63,29 +64,30 @@ text on demand.
 | Diagnose proof and gaps | Implemented | Career Diagnosis uses approved memory; outcome feedback is strategy-only. |
 | Generate reusable proof | Implemented | Proof Artifact Builder produces role-aware, versioned case studies. |
 | Match opportunities and draft answers | Implemented | Application Intelligence matches approved memory and exposes gaps. |
-| Tailored resume and cover letter | Next must-have | Sprint 14; must reuse the compiler/proof layer. |
-| Save a complete application package | Next must-have | Sprint 14 should create a reviewable snapshot. |
+| Tailored resume and cover letter | Implemented | Sprint 14.1 adds improved local writing and optional GPT-5.6 generation behind the same evidence and validation boundary. |
+| Save a complete application package | Implemented | A package parent plus immutable generated, regenerated, and user-edited versions preserves target, profiles, outputs, traces, warnings, and IDs used. |
+| Review and copy package output | Implemented | The workspace keeps drafts, warnings, evidence, unsupported claims, and copy controls together; readiness is blocked for stale output. |
 | Guided memory-gap interview | Important next | Sprint 15 improves the quality of future proof. |
-| Seeded showcase flow | Important for demos | Sprint 17 turns the product into a repeatable walkthrough. |
+| Seeded Build Week data | Implemented | The fictional Maya Chen fixture exercises approved proof, missing-proof warnings, and the guarded live path. |
+| Package-linked outcome tracking | Important next | Sprint 18 should connect a saved version to submission, follow-up, interview, and outcome history. |
 | Browser extension/autofill | Deferred | Valuable only after the intelligence and package workflow are dependable. |
 
 ## Remaining must-haves
 
-These are necessary for a useful personal and demo MVP:
+The approved-memory-to-saved-package loop now exists. These remaining items are
+necessary for a rounded personal and demo MVP:
 
-1. **Reviewed Resume and Cover Letter Builder.** Generate materials only from
-   approved memory, approved enrichment, compiled profiles, proof artifacts,
-   diagnosis, and target context. Every substantive claim must be traceable.
-2. **Application package snapshot.** Preserve the target opportunity, selected
-   memories, evidence/enrichment references, generated drafts, warnings, and
-   user edits as a saveable historical package.
-3. **Clear review/export workflow.** Make it easy to compare a draft against its
-   evidence, copy it, and export a practical representation without silently
-   overwriting the base resume.
-4. **Guided gap collection.** Ask the smallest useful questions when evidence is
-   thin instead of producing weaker prose.
-5. **Demo data and guided walkthrough.** A deterministic seed path must allow a
-   reviewer to see the value without setting up a personal knowledge base first.
+1. **Guided gap collection.** Ask the smallest useful questions when evidence is
+   thin instead of producing weaker prose, and route factual answers through
+   review.
+2. **Practical file export.** Preserve reviewed package wording and warnings in
+   a usable DOCX/PDF or similarly portable representation; copy controls are the
+   current output path.
+3. **Guided showcase UX.** Build Week now has safe fictional data; a later
+   one-click walkthrough should guide a reviewer through it without setup.
+4. **Package-linked application history.** Connect the exact saved version to
+   submission, follow-up, interview, reflection, and outcome events without
+   rewriting historical proof.
 
 ## Nice-to-have features
 
@@ -100,21 +102,48 @@ Do not let these distract from the complete loop above:
 - browser extraction and autofill;
 - multi-user collaboration, external authentication hardening, and hosted
   operations;
-- advanced model providers or agentic workflows.
+- additional model providers or broader agentic workflows.
 
-## Recommended next seven sprints
+## Sprint 14 delivered and the next six sprints
 
-### Sprint 14: Resume and Cover Letter Builder
+### Sprint 14: Resume and Cover Letter Builder — delivered
 
-Build a reviewed application-package workspace from approved canonical memory,
-approved enrichment, compiled profiles, proof artifacts, diagnosis, and target
-job text. Include evidence traces, claim warnings, copy/export-friendly output,
-and an immutable package snapshot. See
-[14-Resume-Cover-Letter-Builder.md](specs/14-Resume-Cover-Letter-Builder.md).
+CareerOS now has a reviewed Application Package Builder using exact selected
+approved memory, approved same-memory enrichment, compiled profiles, and target
+job context. It includes evidence traces, a claim ledger, warnings, copy-ready
+output, staleness detection, and immutable package versions. Existing proof
+artifacts are suggested as attach/review/build actions according to readiness
+rather than imported as new facts. See
+[the implemented specification](specs/14-Resume-Cover-Letter-Builder.md) and
+[the workflow guide](28-Application-Package-Builder.md).
 
-**Definition of done:** one target job produces a reviewable package containing
-tailored resume bullets, cover letter, positioning summary, evidence trace,
-warnings, and a saveable snapshot without invented achievements.
+**Delivered outcome:** one target job produces a reviewable package containing
+tailored bullets, a cover letter, positioning, answers for the supplied
+application questions, proof suggestions, traces, warnings, unsupported claims,
+and immutable versions without treating the job posting or outcome feedback as
+factual proof.
+
+### Sprint 14.1: GPT-5.6 Application Writing Intelligence — implemented, live smoke pending
+
+Sprint 14.1 strengthens the delivered builder without changing its trust model.
+It adds provider-neutral local/OpenAI generation, semantic job understanding,
+2-4 default memory recommendations, claim planning, recruiter critique,
+improved deterministic prose, grouped coverage/warnings/evidence, quality
+review, and a fictional Build Week fixture. Terra is the default live writer;
+Sol review is optional and off by default. Deterministic validation remains the
+final gate before persistence, and the full automated suite runs without a key.
+The single fictional-data live smoke is deliberately pending user confirmation.
+
+### Sprint 14.1.2: Application Question/Answer Contract Alignment — implemented, live acceptance pending
+
+Sprint 14.1.2 makes application questions explicit structured inputs and maps
+answers one-to-one by `question_id`. Required questions receive exactly one
+non-empty answer in input order; optional unanswered questions can be omitted,
+and no questions means no generated snippets. Missing required answers are
+structural failures eligible for one targeted answer-only repair, while valid
+resume and cover-letter output is preserved. Existing evidence-backed factual
+claim checks and private/demo-shared data policy remain authoritative. No live
+OpenAI request was run for Sprint 14.1.2; live acceptance remains pending.
 
 ### Sprint 15: Intelligent Guided Career Interview
 
